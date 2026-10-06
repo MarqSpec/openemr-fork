@@ -1,0 +1,15 @@
+# Build context for openemr-frontend/Dockerfile (context: this directory). Dependencies and build output are
+# rebuilt inside the image; nothing local, generated or secret goes in.
+**/node_modules
+**/.npm
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!bff/.env.example
+test-results
+playwright-report
+blob-report
+documentation
+tests

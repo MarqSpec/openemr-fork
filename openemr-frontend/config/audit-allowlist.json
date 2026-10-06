@@ -1,0 +1,41 @@
+{
+  "$comment": "NFR-SEC-8: high/critical npm advisories accepted for now, per package (\"in\" = package.json name). Read by scripts/deps/check.ts audit. Every entry is a reviewed decision: a GHSA id, the package it is in, why it is acceptable, when it was reviewed (not after today) and when it must be reviewed again (at most 90 days after both the review and today: MAX_REVIEW_DAYS in scripts/deps/policy.ts, not a value in this file). scope \"dev\" is verified against the lockfile: the entry stops counting the moment the advisory is reachable from a production dependency. An expired or stale entry fails the job. Never a blanket skip. Runbook: DEPLOYMENT.md (frontend:deps).",
+  "advisories": [
+    {
+      "id": "GHSA-qxc2-j82w-r537",
+      "package": "@faker-js/faker",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, via @usebruno/cli 4.2.0 (latest) -> @usebruno/requests (^9.7.0; the fix is faker above 10.4.0, a major bump outside Bruno's range). Exploitable only when an attacker controls the template passed to helpers.fake; Bruno feeds it our own committed collection, which uses no {{$random*}} variables. Never bundled or shipped. npm's suggested fix (@usebruno/cli 4.1.0) is a downgrade that does not change this dependency.",
+      "reviewed": "2026-09-28",
+      "expires": "2026-10-28"
+    },
+    {
+      "id": "GHSA-hmw2-7cc7-3qxx",
+      "package": "form-data",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (4.0.4) by @usebruno/cli 4.2.0 (latest; 4.1.0 pins the same). CRLF injection through multipart field names and filenames; our Bruno collection sends no multipart bodies (form-urlencoded only) and its names are our own. Never bundled or shipped. The fix (4.0.6) needs an npm override of Bruno's pin or a Bruno release.",
+      "reviewed": "2026-09-28",
+      "expires": "2026-10-28"
+    },
+    {
+      "id": "GHSA-2883-xcg3-v3hh",
+      "package": "js-yaml",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (4.3.1) by @usebruno/cli 4.2.0 and @usebruno/converters. CPU exhaustion on crafted YAML merge keys; Bruno parses only our own committed collection and environment files. Never bundled or shipped. The fix (4.3.2) needs an npm override of Bruno's pin or a Bruno release; npm's suggested downgrade to @usebruno/cli 4.1.0 (js-yaml ^4.1.1) would clear this one but keeps the form-data and faker findings.",
+      "reviewed": "2026-09-28",
+      "expires": "2026-10-28"
+    },
+    {
+      "id": "GHSA-ph9p-34f9-6g65",
+      "package": "tmp",
+      "in": ["openemr-frontend", "openemr-frontend-bff"],
+      "scope": "dev",
+      "reason": "Dev-only, via gts 7.0.0 (latest) -> inquirer 7 -> external-editor 3 -> tmp ^0.0.33; npm reports no fix. Path traversal through caller-supplied prefix/postfix; reached only by gts's interactive init prompts, which no script or CI job runs (we use gts for its ESLint and Prettier config). Never bundled or shipped.",
+      "reviewed": "2026-09-28",
+      "expires": "2026-12-27"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "$comment": "The token handler's OAuth scopes: the single machine-readable copy of INTERFACES.md section 2. SMART v1 .read only (BUG-11), read-only least privilege (NFR-SEC-4). Change it only together with that section; scripts/oauth_client/registration.test.ts checks it.",
+  "scopes": [
+    "openid",
+    "fhirUser",
+    "offline_access",
+    "api:fhir",
+    "user/Patient.read",
+    "user/AllergyIntolerance.read",
+    "user/Condition.read",
+    "user/MedicationRequest.read",
+    "user/CareTeam.read",
+    "user/Encounter.read",
+    "user/Practitioner.read",
+    "user/Organization.read",
+    "user/Observation.read",
+    "user/Immunization.read",
+    "user/Appointment.read"
+  ]
+}

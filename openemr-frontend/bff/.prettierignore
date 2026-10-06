@@ -1,0 +1,6 @@
+# Generated output and lockfiles are not code.
+*.md
+dist/
+coverage/
+.npm/
+package-lock.json

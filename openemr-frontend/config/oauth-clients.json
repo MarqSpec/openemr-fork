@@ -1,0 +1,28 @@
+{
+  "$comment": "One pinned OAuth client per environment (BUG-27). clientId is public; the client secret is NEVER recorded here or anywhere in git - it lives only in the token handler's server-side environment / CI variables. Registration and enable: DEPLOYMENT.md. null = not registered yet.",
+  "clientName": "openemr-frontend (token handler)",
+  "environments": {
+    "local": {
+      "openemrBaseUrl": "https://localhost:9300",
+      "site": "default",
+      "frontendOrigin": "http://localhost:5173",
+      "clientId": null,
+      "recordClientId": false,
+      "note": "Per-workstation dev stack: each developer registers their own client and keeps its id in their untracked env; never recorded here."
+    },
+    "staging": {
+      "openemrBaseUrl": null,
+      "site": "default",
+      "frontendOrigin": null,
+      "clientId": null,
+      "note": "Not registered yet: the staging OpenEMR and frontend hosts are not fixed (bruno/environments/staging.bru placeholders)."
+    },
+    "production": {
+      "openemrBaseUrl": null,
+      "site": "default",
+      "frontendOrigin": null,
+      "clientId": null,
+      "note": "Not registered yet."
+    }
+  }
+}

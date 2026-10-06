@@ -1,0 +1,14 @@
+{
+  "$comment": "NFR-SEC-8: licences every production dependency of openemr-frontend and openemr-frontend-bff must carry, read from each package-lock.json by scripts/deps/check.ts licences. Adding a licence or an exception is a reviewed change; runbook: DEPLOYMENT.md (frontend:deps).",
+  "allowed": [
+    "MIT",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Apache-2.0",
+    "0BSD",
+    "BlueOak-1.0.0",
+    "CC0-1.0"
+  ],
+  "exceptions": []
+}

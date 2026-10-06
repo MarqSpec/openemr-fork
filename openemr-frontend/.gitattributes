@@ -1,0 +1,2 @@
+# Google TS style / gts expects LF; keep Windows checkouts from converting source to CRLF.
+* text=auto eol=lf

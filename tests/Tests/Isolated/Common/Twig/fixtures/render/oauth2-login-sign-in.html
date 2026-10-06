@@ -1,0 +1,87 @@
+<html>
+<head>
+    <title>OpenEMR Authorization</title>
+    <!-- setupHeader stub -->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+<body class="container-fluid bg-dark mt-0 mt-sm-5 mt-lg-3">
+<div class="row h-100 w-100 justify-content-center align-items-center">
+    <div class="col-sm-6 bg-light text-dark">
+        <div class="text-md-center">
+            <h4 class="mb-4 mt-1">Sign In</h4>
+        </div>
+        <hr />
+        <form method="post" name="userLogin" id="userLogin" action="/oauth2/default/login">
+                    <input type="hidden" name="csrf_token_form" value="test-csrf-token" />
+
+                        <div class="form-group">
+                <label for="oauth2_username">Registered username</label>
+                <input class="form-control" id="oauth2_username" type="text" name="username" value="" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="oauth2_password">Password</label>
+                <input class="form-control" id="oauth2_password" type="password" name="password" value="" autocomplete="current-password">
+            </div>
+
+                        <hr />
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="btn-group">
+                                                    <button type="submit" name="user_role" class="btn btn-outline-primary" value="api">OpenEMR Login <i class="fa fa-sign-in-alt"></i></button>
+                                                            <button type="submit" name="user_role" class="btn btn-outline-info" value="portal-api">Patient Login <i class="fa fa-sign-in-alt"></i></button>
+                                                                        </div>
+                    <div class="form-check-inline float-right">
+                        <input class="form-check-input" type="checkbox" name="persist_login" id="persist_login" value="1">
+                        <label for="persist_login" class="form-check-label">Remember Me</label>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+    function doAuth() {
+        let xl = window.top.xl || function(id) { return id; };
+        let f = document.getElementById("userLogin");
+        let requests = [];
+        try {
+            requests = JSON.parse(f.form_requests.value);
+            if (!(Array.isArray(requests) && requests.length > 0 && requests[0].challenge)) {
+                throw "Invalid U2F request data";
+            }
+        }
+        catch (error) {
+            console.error("Internal error: invalid U2f request data.  This should never happen", error);
+            alert(xl("Internal error: invalid U2F request data"));
+            return;
+        }
+        // The server's getAuthenticateData() repeats the same challenge in all requests.
+        let challenge = requests[0].challenge;
+        const registeredKeys = (requests || []).map(req => ({"version": req.version, "keyHandle": req.keyHandle}));
+        u2f.sign("", challenge, registeredKeys,
+            function (data) {
+                if (data.errorCode && data.errorCode != 0) {
+                    alert(xl("Key access failed with error") +' ' + data.errorCode);
+                    return;
+                }
+                //hide totp input and its label if both on used
+                const totpTokenElement = document.getElementById('totp_token');
+                if (totpTokenElement) {
+                    (totpTokenElement.closest('.form-group') || totpTokenElement).style.display = 'none';
+                }
+                //create new mfa_token input
+                let elInput = document.createElement('input');
+                elInput.setAttribute('type', 'hidden');
+                elInput.setAttribute('name', 'mfa_token');
+                elInput.setAttribute('value', JSON.stringify(data));
+                f.appendChild(elInput);
+                f.mfa_type.value = 'U2F';
+                f.submit();
+            },
+            60
+    );
+    }
+
+</script>
+</body>
+</html>

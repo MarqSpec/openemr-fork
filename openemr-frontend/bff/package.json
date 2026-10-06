@@ -1,0 +1,41 @@
+{
+  "name": "openemr-frontend-bff",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Token handler (BFF) for openemr-frontend: serves the SPA and /bff/* from one origin (REQUIREMENTS.md Q-7)",
+  "license": "GPL-3.0",
+  "type": "module",
+  "prettier": "gts/.prettierrc.json",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/static": "^10.1.4",
+    "fastify": "^5.12.5",
+    "jose": "^6.2.12",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.4",
+    "eslint": "^9.39.5",
+    "globals": "^16.5.0",
+    "gts": "^7.0.0",
+    "msw": "^2.15.0",
+    "prettier": "^3.9.9",
+    "typescript": "~5.9.0",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.1"
+  }
+}

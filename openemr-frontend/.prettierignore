@@ -1,0 +1,11 @@
+# Hand-formatted documentation and generated artifacts are not code.
+*.md
+dist/
+coverage/
+.npm/
+package-lock.json
+test-results/
+playwright-report/
+blob-report/
+# The token handler checks its own formatting (bff/package.json).
+bff/

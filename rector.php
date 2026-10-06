@@ -1,0 +1,83 @@
+<?php
+
+# https://getrector.com/documentation
+
+declare(strict_types=1);
+
+use OpenEMR\Rector\Rules\CatchExceptionToThrowableRector;
+use OpenEMR\Rector\Rules\OEGlobalsBagTypedGettersRector;
+use Rector\Caching\ValueObject\Storage\FileCacheStorage;
+use Rector\CodeQuality\Rector\If_\SimplifyIfElseToTernaryRector;
+use Rector\CodingStyle\Rector\FuncCall\CallUserFuncArrayToVariadicRector;
+use Rector\Config\RectorConfig;
+use Rector\Php80\Rector\Class_\ClassPropertyAssignToConstructorPromotionRector;
+use Rector\ValueObject\PhpVersion;
+
+return RectorConfig::configure()
+    ->withBootstrapFiles([
+        __DIR__ . '/rector-bootstrap.php',
+    ])
+    ->withPaths([
+        __DIR__ . '/Documentation',
+        __DIR__ . '/apis',
+        __DIR__ . '/ccdaservice',
+        __DIR__ . '/ccr',
+        __DIR__ . '/contrib',
+        __DIR__ . '/controllers',
+        __DIR__ . '/custom',
+        __DIR__ . '/gacl',
+        __DIR__ . '/interface',
+        __DIR__ . '/library',
+        __DIR__ . '/oauth2',
+        __DIR__ . '/portal',
+        __DIR__ . '/sites',
+        __DIR__ . '/sphere',
+        __DIR__ . '/src',
+        __DIR__ . '/tests',
+    ])
+    // oe-module-claimrev-connect is a Composer dependency
+    // (claimrevolution/oe-module-claimrev-connect), relocated into this path by
+    // the oe-module-installer-plugin during `composer install`. It is
+    // third-party code, not maintained in this repo, so skip it the same way
+    // vendor/ is skipped.
+    ->withSkip([
+        __DIR__ . '/interface/modules/custom_modules/oe-module-claimrev-connect',
+    ])
+    ->withCache(
+        // ensure file system caching is used instead of in-memory
+        cacheClass: FileCacheStorage::class,
+        // specify a path that works locally as well as on CI job runners
+        cacheDirectory: '/tmp/rector'
+    )
+    ->withCodeQualityLevel(5)
+    ->withConfiguredRule(ClassPropertyAssignToConstructorPromotionRector::class, [
+        'allow_model_based_classes' => true,
+        'inline_public' => false,
+        'rename_property' => true,
+    ])
+    ->withDeadCodeLevel(5)
+    // https://getrector.com/documentation/troubleshooting-parallel
+    // maxNumberOfProcess kept low and timeoutSeconds generous: CI runs on a
+    // single self-hosted machine where up to 4 other jobs (lint/build) are
+    // already competing for CPU, and 12 rector workers on top of that
+    // starved individual children past their own timeout ("Child process
+    // timed out after 120 seconds" x50, aborting the whole run). 300s then
+    // tripped the same way under load (job 105285: "Child process
+    // timed out after 300 seconds", then the 50-error limit at 57%), so the
+    // per-worker timeout is 900s; process count and job size are unchanged.
+    ->withParallel(
+        timeoutSeconds: 900,
+        maxNumberOfProcess: 4,
+        jobSize: 12
+    )
+    // FIXME rector should pick the php version from composer.json
+    // but that doesn't seem to be working, so hard-coding for now.
+    ->withPhpVersion(PhpVersion::PHP_82)
+    ->withRules([
+        CallUserFuncArrayToVariadicRector::class,
+        CatchExceptionToThrowableRector::class,
+        OEGlobalsBagTypedGettersRector::class,
+        SimplifyIfElseToTernaryRector::class,
+    ])
+    ->withPhpSets()
+    ->withTypeCoverageLevel(5);
