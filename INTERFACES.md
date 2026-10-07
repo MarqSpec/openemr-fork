@@ -25,7 +25,7 @@ in [`Documentation/api/`](Documentation/api/README.md) and [`swagger/openemr-api
   them through the device's time zone (`src/api/openemr_date.ts`).
 - FHIR identifies a patient by its **UUID**; the numeric `pid` is never needed.
 
-### 1.1 Transport — the token handler
+### 1.1 Transport — the token handler (BFF)
 
 OpenEMR refuses `user/` scopes to public clients ([BUG-1](REQUIREMENTS.md#bug-1)), so the browser never calls
 OpenEMR's APIs itself. The token handler serves the SPA and `/bff/*` from one origin, holds a confidential client and

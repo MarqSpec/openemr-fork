@@ -321,10 +321,10 @@ docker run --rm -p 8080:8080 \
 `/bff/health` on the running container answers `{"status":"ok","build":…}`. Deployment, its variables and the
 cache headers the CDN relies on: [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 
-Local gates, the same commands CI's `frontend:bff` job runs:
+Local gates, the same commands the token handler's CI checks run:
 `npm run lint` · `npm run typecheck` · `npm run format:check` · `npm test` · `npm run build`. Tests are Vitest
 against `fastify.inject()` (no listening socket) with OpenEMR faked by MSW — for sign-in, a stub authorization
 server (`src/test/stub_openemr.ts`) with its own RS256 key generated per test run, and a stub FHIR server that
 records every request it receives and answers with synthetic PHI the log tests look for. No real network, no real OpenEMR.
 This package's `npm audit` (high+) and production-licence checks run from the SPA's directory, over both lockfiles:
-`npm run deps:audit` / `npm run deps:licences` there, `frontend:deps` in CI.
+`npm run deps:audit` / `npm run deps:licences` there, the same in CI.

@@ -596,8 +596,8 @@ function nextSteps(
     : `  2. This environment's client id is not recorded in config/oauth-clients.json (per workstation): keep "${clientId}" in your untracked environment.`;
   const secret =
     secretPath === undefined
-      ? "  3. The client secret is printed on stdout above: put it in the token handler's server-side environment / a masked CI variable, never in git."
-      : `  3. The client secret is written to ${secretPath}: put it in the token handler's server-side environment / a masked CI variable, never in git, then delete the file.`;
+      ? "  3. The client secret is printed on stdout above: put it in the token handler's server-side environment / a secret in your CI or hosting platform, never in git."
+      : `  3. The client secret is written to ${secretPath}: put it in the token handler's server-side environment / a secret in your CI or hosting platform, never in git, then delete the file.`;
   return [
     'Next (operator steps, DEPLOYMENT.md):',
     `  1. Enable the client: Administration > System > API Clients > ${clientId} > Enable Client. It is created disabled (BUG-14).`,
