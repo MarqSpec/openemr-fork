@@ -202,7 +202,7 @@ two columns); portrait stacks to one column; touch targets are at least 48 dp.
 | **FR-AUTH-5**<a id="fr-auth-5"></a> | Token refresh is invisible to the app. A **401** from `/bff/*` means the session is over: clear PHI and show sign-in. A **403** shows a per-card "Not authorised to view" state — never a retry loop. | P0 |
 | **FR-AUTH-6**<a id="fr-auth-6"></a> | A documented, repeatable client registration per environment: redirect and post-logout URIs, scopes, client type, and enabling the client in OpenEMR ([DEPLOYMENT.md](DEPLOYMENT.md) §4). | P0 |
 
-### BFF — The token handler
+### BFF — token handler
 
 | ID | Requirement | Pri |
 |---|---|---|

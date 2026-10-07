@@ -4,7 +4,7 @@
 # FR-BFF-1). Build context is THIS directory (openemr-frontend/), not the repo root:
 #   docker build -t openemr-frontend:local openemr-frontend
 # Railway builds the same file server-side from `railway up openemr-frontend --path-as-root`
-# (the frontend's staging deploy, frontend:deploy:staging).
+# (how the staging deploy uploads it).
 #
 # No secrets are baked in: OPENEMR_BASE_URL (required) and the rest of bff/.env.example come from the
 # platform's environment at run time. The SPA's build reads two optional VITE_* variables, both public,
@@ -15,7 +15,7 @@
 # Every image the build pulls is pinned by tag AND digest (never :latest): NODE_IMAGE below and the syntax
 # frontend on line 1. The tag says what it is; the digest (the multi-arch index) is what is pulled, so a tag
 # rebuilt upstream changes nothing here until someone bumps it. Keep Node 22 (both package.json files say
-# engines >=22, and CI's frontend jobs run node:22-alpine). Bump both halves together, never the tag alone:
+# engines >=22). Bump both halves together, never the tag alone:
 # DEPLOYMENT.md "Bumping a pinned base image".
 # DEPLOYMENT.md "The frontend on Railway"
 # -----------------------------------------------------------------------------
@@ -72,11 +72,11 @@ COPY --from=spa /spa/dist ./public
 # The commit this image is built from, reported by /bff/health as `build` so a post-deploy check can tell the new
 # deployment from the old one. Public (the commit is in the repo), not a secret. Two inputs, last so a new commit
 # reuses every cached layer above:
-#   - BUILD_SHA in this directory. frontend:deploy:staging writes the commit into the upload before `railway up`,
+#   - BUILD_SHA in this directory. The staging deploy writes the commit into the upload before `railway up`,
 #     so the sha travels with that source. The committed file is only a newline. When the file has a
 #     commit id, docker-entrypoint.sh exports it over any BUILD_SHA environment variable — a leftover Railway
 #     service variable cannot relabel the image, and a failed deploy cannot leave one behind.
-#   - ARG BUILD_SHA, which `frontend:image` and a local `docker build --build-arg` pass. With the empty committed
+#   - ARG BUILD_SHA, which an image check or a local `docker build --build-arg BUILD_SHA=<commit>` passes. With the empty committed
 #     file, that arg is what those builds report. Empty file and empty arg = unknown.
 ARG BUILD_SHA=
 ENV BUILD_SHA=${BUILD_SHA}

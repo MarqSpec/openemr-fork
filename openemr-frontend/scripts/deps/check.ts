@@ -1,8 +1,8 @@
-// CLI for policy.ts (NFR-SEC-8), run the same locally and in CI (frontend:deps, frontend:test):
+// CLI for policy.ts (NFR-SEC-8), run the same locally and in CI (the dependency and build checks):
 //   node scripts/deps/check.ts audit <package-dir>...     npm audit (lockfile only) against config/audit-allowlist.json
 //   node scripts/deps/check.ts licences <package-dir>...  production licences against config/licence-allowlist.json
 //   node scripts/deps/check.ts no-cdn <dist-dir>          no script or stylesheet from another origin in the build
-// reference: DEPLOYMENT.md (frontend:deps)
+// reference: DEPLOYMENT.md
 
 import {spawnSync} from 'node:child_process';
 import {readFileSync, readdirSync} from 'node:fs';
