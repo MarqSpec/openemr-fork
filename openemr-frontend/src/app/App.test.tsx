@@ -10,8 +10,8 @@ import {APP_VERSION} from './version';
 import {THEME_PREFERENCE_KEY} from '../theme/theme_preference';
 import {App} from './App';
 
-// reference: REQUIREMENTS.md FR-UI-2, FR-UI-3, FR-AUTH-1, FR-AUTH-3, FR-AUTH-5 ·
-// REQUIREMENTS.md W-1, W-9
+// reference: REQUIREMENTS.md FR-UI-2, FR-UI-3, FR-UI-4, FR-AUTH-1, FR-AUTH-3, FR-AUTH-5 ·
+// REQUIREMENTS.md W-1, W-9 · INTERFACES.md API-42, API-48
 
 const SESSION_URL = '/bff/session';
 let sessionReads = 0;
@@ -196,6 +196,37 @@ describe('given nobody is signed in', () => {
     ).toBeInTheDocument();
 
     answerSession(signedIn);
+    await userEvent.click(screen.getByRole('button', {name: 'Try again'}));
+
+    expect(
+      await screen.findByRole('button', {name: 'Signed in as Dr. Avery Demo'}),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('given a live session whose runtime config cannot be read (API-48)', () => {
+  it('when /bff/config fails, then nothing signed-in is drawn — sign-in shows its notice and "Try again" — and trying again signs in (guards PHI on screen with no known privacy grace)', async () => {
+    answerSession(signedIn);
+    server.use(
+      http.get('/bff/config', () => new HttpResponse(null, {status: 502})),
+    );
+    render(<App />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Couldn't check your sign-in",
+    );
+    expect(
+      screen.queryByRole('heading', {level: 1, name: 'Patient search'}),
+    ).toBeNull();
+    expect(
+      screen.queryByRole('button', {name: 'Signed in as Dr. Avery Demo'}),
+    ).toBeNull();
+
+    server.use(
+      http.get('/bff/config', () =>
+        HttpResponse.json({patientApps: [], privacyGraceSeconds: 60}),
+      ),
+    );
     await userEvent.click(screen.getByRole('button', {name: 'Try again'}));
 
     expect(

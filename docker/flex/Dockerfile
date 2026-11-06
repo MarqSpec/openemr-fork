@@ -167,6 +167,15 @@ RUN usermod -u 1000 apache
 # The symlink ensures 'php' command points to the correct versioned binary
 RUN ln -sf /usr/bin/php${PHP_VERSION_ABBR} /usr/bin/php
 
+# PHP2Shell (CVE-2026-109618 / CVE-2026-109619, unauthenticated RCE, exploited in the wild) is fixed in
+# PHP 8.5.12 (Alpine php85 8.5.12-r0, published 2026-10-22). The php package above is unpinned, so when
+# building the 8.5 series fail the build if apk resolved anything older (a stale mirror, or a php layer
+# reused from the build cache). Other PHP_VERSION series are not checked here.
+ARG PHP_MIN_VERSION=8.5.12
+RUN if [ "${PHP_VERSION}" = "8.5" ]; then \
+        php -r 'if (version_compare(PHP_VERSION, getenv("PHP_MIN_VERSION"), "<")) { fwrite(STDERR, "PHP " . PHP_VERSION . " is older than " . getenv("PHP_MIN_VERSION") . " (PHP2Shell, CVE-2026-109618/-109619); rebuild with --no-cache\n"); exit(1); }'; \
+    fi
+
 # Install Composer (PHP dependency manager) for OpenEMR package installation
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin --filename=composer
 

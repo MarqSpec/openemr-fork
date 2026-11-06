@@ -12,6 +12,9 @@ class AgentForgeGlobalConfigTest extends TestCase
     protected function setUp(): void
     {
         $GLOBALS['disable_translation'] = true;
+        // The config implements IngestSettings; the module namespace is not composer-autoloaded.
+        require_once __DIR__ . '/../../../../../interface/modules/custom_modules/'
+            . 'oe-module-agentforge/src/Ingest/IngestSettings.php';
         require_once __DIR__ . '/../../../../../interface/modules/custom_modules/'
             . 'oe-module-agentforge/src/Config/AgentForgeGlobalConfig.php';
     }

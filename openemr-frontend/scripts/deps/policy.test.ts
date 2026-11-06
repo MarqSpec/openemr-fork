@@ -236,10 +236,13 @@ describe('allowlistProblems', () => {
     expect(Object.keys(auditAllowlist)).not.toContain('maxDays');
   });
 
-  it('holds for the committed allow-list on the day it was reviewed', () => {
-    expect(allowlistProblems(auditAllowlist as AuditAllowlist, TODAY)).toEqual(
-      [],
-    );
+  it('holds for the committed allow-list on the day of its latest review', () => {
+    // a separate change (a fixed date fails once an entry is reviewed later)
+    const committed = auditAllowlist as AuditAllowlist;
+    const latest = committed.advisories
+      .map(a => a.reviewed)
+      .reduce((a, b) => (b > a ? b : a), TODAY);
+    expect(allowlistProblems(committed, latest)).toEqual([]);
   });
 });
 

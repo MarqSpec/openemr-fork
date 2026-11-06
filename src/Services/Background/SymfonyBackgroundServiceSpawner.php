@@ -274,6 +274,24 @@ final readonly class SymfonyBackgroundServiceSpawner implements BackgroundServic
             );
             return ['name' => $name, 'status' => 'error'];
         }
+
+        // A successful child's stderr is where its own logging lands: in a
+        // CLI process SystemLogger writes through error_log(), which goes
+        // to stderr when error_log is unset. Relay it, so a service's log
+        // lines reach the parent's log (under mod_php, Apache's ErrorLog)
+        // as they did before subprocess isolation. Warning, because the
+        // child's own level is not recoverable from the raw stream and the
+        // parent's default threshold (SystemLogger: WARNING) would drop
+        // anything lower - which would silently undo the relay.
+        if (trim($stderr) !== '') {
+            $this->logger->warning(
+                'Background service subprocess wrote to stderr.',
+                [
+                    'service' => $this->safeServiceName($name),
+                    'stderr' => $this->safeLogSnippet($stderr),
+                ],
+            );
+        }
         return ['name' => $name, 'status' => $status];
     }
 

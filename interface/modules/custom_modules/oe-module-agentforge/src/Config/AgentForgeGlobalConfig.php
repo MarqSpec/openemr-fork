@@ -1,13 +1,25 @@
 <?php
 
+/**
+ * AgentForge module settings: each read from OpenEMR's globals table, falling back to an environment variable.
+ *
+ * @package   OpenEMR
+ * @link      https://www.open-emr.org
+ * @author    AgentForge
+ * @copyright Copyright (c) 2026 AgentForge
+ * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
+ */
+
 declare(strict_types=1);
 
 namespace OpenEMR\Modules\AgentForge\Config;
 
 use OpenEMR\Common\Database\QueryUtils;
 use OpenEMR\Core\OEGlobalsBag;
+use OpenEMR\Modules\AgentForge\Ingest\IngestRetry;
+use OpenEMR\Modules\AgentForge\Ingest\IngestSettings;
 
-final class AgentForgeGlobalConfig
+final class AgentForgeGlobalConfig implements IngestSettings
 {
     public const LAUNCH_URI = 'agentforge_launch_uri';
     public const AGENDA_LAUNCH_URI = 'agentforge_agenda_launch_uri';
@@ -17,8 +29,20 @@ final class AgentForgeGlobalConfig
     /** The sidecar's POST /documents/ingest endpoint the ingestion cron calls. */
     public const INGEST_URI = 'agentforge_ingest_uri';
 
-    /** Last `documents.id` the ingestion cron has forwarded (the scan watermark). */
+    /**
+     * The scan watermark: every `documents.id` at or below it has been forwarded to the sidecar, or given up on
+     * after repeated rejections. It stops just below the lowest document whose forward failed, so that document
+     * is scanned again next run.
+     */
     public const INGEST_WATERMARK = 'agentforge_ingest_watermark';
+
+    /**
+     * "<documentId>:<failedRuns>:<acceptedThrough>" for the failed document holding the watermark back ('' when
+     * none): how many runs have counted against it (which failures count, and when, is DocumentIngestService's
+     * rule) and the highest document id accepted so far, so a document that always fails is given up on instead
+     * of holding the watermark forever. Holds numbers only, no patient data; not shown in the settings form.
+     */
+    public const INGEST_RETRY = 'agentforge_ingest_retry';
 
     /**
      * JSON object mapping an OpenEMR document category id (string) to a sidecar docType
@@ -26,6 +50,12 @@ final class AgentForgeGlobalConfig
      * forwards documents whose category is in this map, so unrelated uploads are ignored.
      */
     public const INGEST_CATEGORY_MAP = 'agentforge_ingest_category_map';
+
+    /**
+     * The reason the ingest cron last skipped, as logged at warning level ('' once it runs again). Lets an
+     * unconfigured install warn once instead of every run; not shown in the settings form.
+     */
+    public const INGEST_SKIP_NOTICE = 'agentforge_ingest_skip_notice';
 
     /** Whether the module injects the top-nav "Daily Agenda" tab (default on). */
     public const SHOW_AGENDA_MENU = 'agentforge_show_agenda_menu';
@@ -77,7 +107,7 @@ final class AgentForgeGlobalConfig
         return $this->resolve(self::INGEST_URI, 'AGENTFORGE_INGEST_URI');
     }
 
-    /** The highest `documents.id` already forwarded to the sidecar (0 when never run). */
+    /** The `documents.id` up to which every document is forwarded or given up on (0 when never run). */
     public function getIngestWatermark(): int
     {
         return (int) OEGlobalsBag::getInstance()->getString(self::INGEST_WATERMARK);
@@ -88,22 +118,32 @@ final class AgentForgeGlobalConfig
         $this->upsert(self::INGEST_WATERMARK, (string) $lastDocumentId);
     }
 
-    /**
-     * Category-id => docType map. Returns an empty array when unset or malformed, which makes the
-     * cron a no-op (fail closed) rather than forwarding documents with an unknown schema.
-     *
-     * @return array<string, string>
-     */
-    public function getIngestCategoryMap(): array
+    public function getIngestRetry(): ?IngestRetry
     {
-        $raw = $this->resolve(self::INGEST_CATEGORY_MAP, 'AGENTFORGE_INGEST_CATEGORY_MAP');
-        if ($raw === null) {
-            return [];
-        }
+        return IngestRetry::fromString(OEGlobalsBag::getInstance()->getString(self::INGEST_RETRY));
+    }
 
+    public function setIngestRetry(?IngestRetry $retry): void
+    {
+        $this->upsert(self::INGEST_RETRY, $retry?->toString() ?? '');
+    }
+
+    public function getIngestCategoryMapSource(): ?string
+    {
+        return $this->resolve(self::INGEST_CATEGORY_MAP, 'AGENTFORGE_INGEST_CATEGORY_MAP');
+    }
+
+    /**
+     * Parses a configured category map. null when it is not a JSON object (or array) at all; otherwise only the
+     * entries whose docType is recognised ("lab_pdf" | "intake_form"), which may leave it empty.
+     *
+     * @return ?array<array-key, string>
+     */
+    public static function parseIngestCategoryMap(string $raw): ?array
+    {
         $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
-            return [];
+            return null;
         }
 
         $map = [];
@@ -114,6 +154,16 @@ final class AgentForgeGlobalConfig
         }
 
         return $map;
+    }
+
+    public function getIngestSkipNotice(): string
+    {
+        return OEGlobalsBag::getInstance()->getString(self::INGEST_SKIP_NOTICE);
+    }
+
+    public function setIngestSkipNotice(string $reason): void
+    {
+        $this->upsert(self::INGEST_SKIP_NOTICE, $reason);
     }
 
     public function getLaunchMode(): string

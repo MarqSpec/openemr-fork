@@ -1,7 +1,7 @@
 # Interfaces
 
 Every server call the patient-dashboard frontend makes, by `API-` id — the calls the browser makes to its token
-handler (API-40…47) and the calls the token handler makes to OpenEMR (API-1…24). The typed API layer
+handler (API-40…48) and the calls the token handler makes to OpenEMR (API-1…24). The typed API layer
 (`openemr-frontend/src/api/`) and the token handler's allow-list (`openemr-frontend/bff/src/fhir_allow_list.ts`)
 implement exactly these rows and nothing else ([NFR-CON-2](REQUIREMENTS.md#nfr-con-2)). Requirement and defect IDs
 (`FR-`, `NFR-`, `BUG-`) are in [REQUIREMENTS.md](REQUIREMENTS.md). OpenEMR's own complete API is documented upstream
@@ -49,6 +49,7 @@ every token, and proxies an allow-list of FHIR reads:
 | **API-45**<a id="api-45"></a> | `GET /bff/health` · `GET /bff/ready` | Liveness `200 {"status":"ok","build":"<commit>"}`; readiness `200 {"status":"ready"}` when OpenEMR's SMART discovery (API-2) answers, else `503` with a reason |
 | **API-46**<a id="api-46"></a> | `POST /bff/session/activity` (a same-origin `fetch`; CSRF-checked) | The keep-alive: restart the idle clock and answer `200 {expiresAt}`, never past the maximum session length; never calls OpenEMR |
 | **API-47**<a id="api-47"></a> | `GET {openemr}/interface/modules/custom_modules/oe-module-agentforge/public/agenda-drilldown-launch.php?patient={uuid}` | Not a call: a new-tab link from the Patient apps slot to the AgentForge module's launch page ([FR-APP-1](REQUIREMENTS.md#fr-app-1)) |
+| **API-48**<a id="api-48"></a> | `GET /bff/config` (no session needed; other methods `405`, `Allow: GET`) | The SPA's runtime config, so one image runs in every environment: `200 {"patientApps":[{"label","url","aclHint"?}],"privacyGraceSeconds"}`, built at start-up from the token handler's own `PATIENT_APPS` and `PRIVACY_GRACE_SECONDS`. The SPA reads it beside API-42 on every start and shows no patient data until it has answered ([FR-APP-1](REQUIREMENTS.md#fr-app-1), [FR-UI-4](REQUIREMENTS.md#fr-ui-4)); never calls OpenEMR |
 
 Every token-handler response carries the CSP, HSTS, `Referrer-Policy: same-origin` and `nosniff` headers of
 [NFR-SEC-2](REQUIREMENTS.md#nfr-sec-2); `/bff/*` adds `Cache-Control: no-store`. A 4xx the token handler answers
@@ -167,7 +168,8 @@ activating one means adding `api:oemr` and its scope to §2 and the row to the t
 | FR-CARD-CT-1 | API-17, API-18, API-19 |
 | FR-CARD-ENC-1 | API-20, API-18, API-19 |
 | FR-CARD-VIT/LAB/IMM/APT-1 | API-21 … API-24 (APT-1 also API-18) |
-| FR-APP-1 | API-47 |
+| FR-APP-1 | API-48 (the list, at run time), API-47 |
+| FR-UI-4 privacy screen | API-48 (the grace, at run time), API-43 |
 
 **Requests per dashboard open (P0):** API-12, API-13, API-14, API-15/16 (one read), API-17 and API-20 in parallel,
 each an API-44 hop, plus the de-duplicated name reads ([NFR-PERF-3](REQUIREMENTS.md#nfr-perf-3)); each P1 card adds

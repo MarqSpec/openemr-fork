@@ -302,9 +302,11 @@ handle_swarm_mode() {
             (( waited += 10 ))
         done
 
-        # Try one more time to become leader (in case leader died just as we timed out)
+        # Try one more time to become leader (in case leader died just as we timed out).
+        # Skip when we already hold AUTHORITY: try_become_leader's noclobber write
+        # fails against our own file and would demote us.
         # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
-        if [[ ! -f "${OE_ROOT}/sites/docker-completed" ]] && try_become_leader; then
+        if [[ "${AUTHORITY}" != "yes" ]] && [[ ! -f "${OE_ROOT}/sites/docker-completed" ]] && try_become_leader; then
             echo "Promoted to leader after waiting period"
         fi
 
@@ -490,6 +492,18 @@ check_upgrade() {
         return 0
     fi
 
+    # A never-configured site has no sites/default/docker-version file, so
+    # docker_version_sites below defaults to 0 -- indistinguishable from a
+    # real "needs upgrading from version 0" case unless this is checked
+    # first. Without this guard, a fresh install with no existing config
+    # (e.g. a brand-new volume) misfires run_upgrade, which correctly
+    # refuses ("not configured yet") and returns 1; with set -e that kills
+    # the script and the container crash-loops instead of ever reaching the
+    # normal first-time setup path.
+    if [[ "$(is_configured)" != "1" ]]; then
+        return 0
+    fi
+
     # Read version numbers from different locations
     # Use integer types to guarantee numeric values defaulting to 0
     local -i docker_version_root=0
@@ -500,7 +514,28 @@ check_upgrade() {
     [[ -f "${OE_ROOT}/docker-version" ]] && docker_version_code=$(cat "${OE_ROOT}/docker-version" 2>/dev/null || echo 0)
     [[ -f "${OE_ROOT}/sites/default/docker-version" ]] && docker_version_sites=$(cat "${OE_ROOT}/sites/default/docker-version" 2>/dev/null || echo 0)
 
-    # Upgrade needed if container/code versions match but sites version is older
+    # A configured site with no sites marker was set up through the web
+    # installer (MANUAL_SETUP, or no MYSQL_ROOT_PASS): only auto-configure
+    # writes the marker. Its schema is whatever that code installed, so record
+    # the code's version rather than replaying every fsupgrade from 0.
+    if [[ ! -f "${OE_ROOT}/sites/default/docker-version" ]]; then
+        if [[ "${docker_version_code}" -gt 0 ]]; then
+            echo -n "${docker_version_code}" > "${OE_ROOT}/sites/default/docker-version"
+            echo "Version marker created for a manually set-up site: ${docker_version_code}"
+        fi
+        return 0
+    fi
+
+    # Each marker is written by a different party:
+    #   /root/docker-version                     the image (Dockerfile)
+    #   ${OE_ROOT}/docker-version                the code in the webroot (Dockerfile;
+    #                                            stays old if the whole webroot is
+    #                                            kept on an old volume)
+    #   ${OE_ROOT}/sites/default/docker-version  the site data (first install and
+    #                                            run_upgrade; on the sites/ volume)
+    # Upgrade when the code is this image's code and the site data is older. A
+    # new image on an old sites/ volume is the image-swap case (#153); an old
+    # code marker means old code, which the new fsupgrade scripts must not touch.
     if [[ "${docker_version_root}" = "${docker_version_code}" ]] &&
        [[ "${docker_version_root}" -gt "${docker_version_sites}" ]]; then
         echo "Upgrade detected: ${docker_version_sites} -> ${docker_version_root}"
@@ -551,7 +586,7 @@ run_upgrade() {
             # Update heartbeat after each upgrade script
             [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
         fi
-        (( c++ ))
+        c=$(( c + 1 ))
     done
 
     # Update version marker

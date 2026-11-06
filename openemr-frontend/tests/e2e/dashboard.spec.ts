@@ -3,9 +3,12 @@ import {expect, test, type Locator, type Page} from '@playwright/test';
 import {
   TEST_PATIENT_ID,
   allergy,
+  appointment,
   careTeam,
   condition,
   encounter,
+  immunization,
+  labResult,
   medicationRequest,
   operationOutcome,
   organization,
@@ -13,6 +16,7 @@ import {
   practitioner,
   prescription,
   searchBundle,
+  vitalsForm,
 } from '../../src/test/fhir_fixtures';
 import {blockingViolations} from './axe';
 import {stubSignedIn} from './bff_stubs';
@@ -97,6 +101,17 @@ const MEDICATION_REQUESTS = [
   prescription({medicationCodeableConcept: {text: 'Test drug B 20 mg'}}),
 ];
 
+/**
+ * The P1 cards' reads (…130): one vitals form (API-21), one laboratory result
+ * (API-22), one immunization (API-23) and one appointment (API-24), so each card draws data, not its error state,
+ * and the axe scans cover them loaded. API-21 and API-22 are both `/bff/fhir/Observation`; the `category` the card
+ * sends tells them apart, as the real server does.
+ */
+const VITALS = vitalsForm('2026-09-10T09:00:00-04:00', 'test-vitals');
+const LABS = [labResult()];
+const IMMUNIZATIONS = [immunization()];
+const APPOINTMENTS = [appointment()];
+
 async function answerFhir(page: Page): Promise<void> {
   await page.route('**/bff/fhir/**', async route => {
     const {pathname} = new URL(route.request().url());
@@ -108,6 +123,21 @@ async function answerFhir(page: Page): Promise<void> {
       await route.fulfill({json: searchBundle(ALLERGIES)});
     } else if (pathname === '/bff/fhir/MedicationRequest') {
       await route.fulfill({json: searchBundle(MEDICATION_REQUESTS)});
+    } else if (pathname === '/bff/fhir/Observation') {
+      const category = new URL(route.request().url()).searchParams.get(
+        'category',
+      );
+      if (category === 'vital-signs') {
+        await route.fulfill({json: searchBundle(VITALS)});
+      } else if (category === 'laboratory') {
+        await route.fulfill({json: searchBundle(LABS)});
+      } else {
+        await route.fulfill({status: 404, json: operationOutcome('not-found')});
+      }
+    } else if (pathname === '/bff/fhir/Immunization') {
+      await route.fulfill({json: searchBundle(IMMUNIZATIONS)});
+    } else if (pathname === '/bff/fhir/Appointment') {
+      await route.fulfill({json: searchBundle(APPOINTMENTS)});
     } else if (pathname === '/bff/fhir/CareTeam') {
       await route.fulfill({json: searchBundle(CARE_TEAMS)});
     } else if (pathname === '/bff/fhir/Encounter') {
@@ -147,6 +177,31 @@ async function openDashboard(page: Page): Promise<void> {
     }),
   ).toBeVisible();
   await expectCareTeamLoaded(page);
+  await expectP1CardsLoaded(page);
+}
+
+/**
+ * Each P1 card shows its synthetic row and none shows "Couldn't load": the alert a failed read draws is
+ * what an unanswered stub used to leave in all four.
+ */
+async function expectP1CardsLoaded(page: Page): Promise<void> {
+  await expect(
+    cardNamed(page, 'Vitals').getByRole('cell', {name: '134/84'}),
+  ).toBeVisible();
+  await expect(
+    cardNamed(page, 'Labs').getByText('Test hemoglobin A1c'),
+  ).toBeVisible();
+  await expect(
+    cardNamed(page, 'Immunizations').getByText(
+      'Test influenza vaccine, injectable',
+    ),
+  ).toBeVisible();
+  await expect(
+    cardNamed(page, 'Appointments').getByText('Test office visit'),
+  ).toBeVisible();
+  for (const name of ['Vitals', 'Labs', 'Immunizations', 'Appointments']) {
+    await expect(cardNamed(page, name).getByRole('alert')).toHaveCount(0);
+  }
 }
 
 /** Both teams' tables, every name read settled: two members and the header, then one member and the header. */
@@ -306,7 +361,7 @@ test.describe('given the dashboard layout (FR-UI-1, W-3, W-4)', () => {
 
 for (const theme of ['Light', 'Dark'] as const) {
   test.describe(`given the ${theme} theme (NFR-A11Y-1)`, () => {
-    test('when axe scans the dashboard with its header and loaded cards, the Care Team tables included, then it finds no serious or critical WCAG violations (guards contrast, naming and landmark regressions)', async ({
+    test('when axe scans the dashboard with its header and loaded cards, the Care Team tables and the P1 cards included, then it finds no serious or critical WCAG violations (guards contrast, naming and landmark regressions)', async ({
       page,
     }) => {
       await openDashboard(page);
@@ -318,6 +373,7 @@ for (const theme of ['Light', 'Dark'] as const) {
       await expect(page.getByRole('menu')).toBeHidden();
       await expectDrawnIn(page, theme === 'Dark' ? 'dark' : 'light');
       await expectCareTeamLoaded(page);
+      await expectP1CardsLoaded(page);
 
       expect(await blockingViolations(page)).toEqual([]);
     });

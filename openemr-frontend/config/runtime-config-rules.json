@@ -1,0 +1,241 @@
+{
+  "$comment": "The rules for the SPA's runtime config (API-48), as cases both parsers are tested against: the token handler's (bff/src/runtime_config.test.ts, from PATIENT_APPS and PRIVACY_GRACE_SECONDS) and the SPA's (src/api/config/runtime_config.test.ts, from the /bff/config answer). They share no code, so a rule widened on one side only turns that side's suite red. accepted: the token handler serves `expected` (default: `value`) and the SPA keeps it; refused: the token handler serves no apps / the 60 s default, and the SPA shows no slot / refuses the answer. Synthetic hosts only.",
+  "patientApps": [
+    {
+      "case": "AgentForge with an access hint",
+      "accepted": true,
+      "value": [
+        {
+          "label": "Launch AgentForge",
+          "url": "https://openemr.example.test/interface/modules/custom_modules/oe-module-agentforge/public/agenda-drilldown-launch.php?patient={patientId}",
+          "aclHint": "patients/demo"
+        }
+      ]
+    },
+    {
+      "case": "an entry with no access hint",
+      "accepted": true,
+      "value": [
+        {
+          "label": "Launch AgentForge",
+          "url": "https://openemr.example.test/launch.php?patient={patientId}"
+        }
+      ]
+    },
+    {
+      "case": "a padded label and hint, trimmed",
+      "accepted": true,
+      "value": [
+        {
+          "label": "  Launch AgentForge ",
+          "url": "https://openemr.example.test/launch.php?patient={patientId}",
+          "aclHint": " patients/demo "
+        }
+      ],
+      "expected": [
+        {
+          "label": "Launch AgentForge",
+          "url": "https://openemr.example.test/launch.php?patient={patientId}",
+          "aclHint": "patients/demo"
+        }
+      ]
+    },
+    {
+      "case": "a local development OpenEMR over plain http",
+      "accepted": true,
+      "value": [
+        {
+          "label": "Dev",
+          "url": "http://localhost:8300/launch.php?patient={patientId}"
+        }
+      ]
+    },
+    {
+      "case": "the placeholder in the path",
+      "accepted": true,
+      "value": [
+        {
+          "label": "App",
+          "url": "https://openemr.example.test/p/{patientId}/launch"
+        }
+      ]
+    },
+    {
+      "case": "exactly 8 entries, a 60-character label and a 120-character hint",
+      "accepted": true,
+      "value": [
+        {
+          "label": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "url": "https://a.example.test/{patientId}",
+          "aclHint": "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH"
+        },
+        {"label": "App 2", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 3", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 4", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 5", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 6", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 7", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 8", "url": "https://a.example.test/{patientId}"}
+      ]
+    },
+    {"case": "an empty list", "accepted": true, "value": []},
+    {
+      "case": "not a list",
+      "accepted": false,
+      "value": {
+        "label": "Launch AgentForge",
+        "url": "https://openemr.example.test/launch.php?patient={patientId}"
+      }
+    },
+    {
+      "case": "an entry with no label",
+      "accepted": false,
+      "value": [
+        {"url": "https://openemr.example.test/launch.php?patient={patientId}"}
+      ]
+    },
+    {
+      "case": "a blank label",
+      "accepted": false,
+      "value": [
+        {
+          "label": "  ",
+          "url": "https://openemr.example.test/launch.php?patient={patientId}"
+        }
+      ]
+    },
+    {
+      "case": "a label over 60 characters",
+      "accepted": false,
+      "value": [
+        {
+          "label": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "url": "https://a.example.test/{patientId}"
+        }
+      ]
+    },
+    {
+      "case": "an access hint over 120 characters",
+      "accepted": false,
+      "value": [
+        {
+          "label": "App",
+          "url": "https://a.example.test/{patientId}",
+          "aclHint": "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH"
+        }
+      ]
+    },
+    {
+      "case": "a blank access hint",
+      "accepted": false,
+      "value": [
+        {
+          "label": "App",
+          "url": "https://a.example.test/{patientId}",
+          "aclHint": " "
+        }
+      ]
+    },
+    {
+      "case": "a key the entry does not define",
+      "accepted": false,
+      "value": [
+        {
+          "label": "App",
+          "url": "https://a.example.test/{patientId}",
+          "target": "_self"
+        }
+      ]
+    },
+    {
+      "case": "more than 8 entries",
+      "accepted": false,
+      "value": [
+        {"label": "App 1", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 2", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 3", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 4", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 5", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 6", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 7", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 8", "url": "https://a.example.test/{patientId}"},
+        {"label": "App 9", "url": "https://a.example.test/{patientId}"}
+      ]
+    },
+    {
+      "case": "a URL with no {patientId} placeholder",
+      "accepted": false,
+      "value": [
+        {"label": "App", "url": "https://openemr.example.test/launch.php"}
+      ]
+    },
+    {
+      "case": "a javascript: URL",
+      "accepted": false,
+      "value": [{"label": "App", "url": "javascript:alert({patientId})"}]
+    },
+    {
+      "case": "a relative URL",
+      "accepted": false,
+      "value": [{"label": "App", "url": "/launch.php?patient={patientId}"}]
+    },
+    {
+      "case": "plain http to a host other than localhost",
+      "accepted": false,
+      "value": [
+        {
+          "label": "App",
+          "url": "http://openemr.example.test/launch.php?patient={patientId}"
+        }
+      ]
+    },
+    {
+      "case": "credentials in the URL",
+      "accepted": false,
+      "value": [
+        {
+          "label": "App",
+          "url": "https://user:pw@openemr.example.test/launch.php?patient={patientId}"
+        }
+      ]
+    },
+    {
+      "case": "the placeholder in the host",
+      "accepted": false,
+      "value": [
+        {"label": "App", "url": "https://{patientId}.example.test/launch.php"}
+      ]
+    },
+    {
+      "case": "the placeholder in the port",
+      "accepted": false,
+      "value": [
+        {
+          "label": "App",
+          "url": "https://openemr.example.test:{patientId}/launch.php"
+        }
+      ]
+    },
+    {
+      "case": "one bad entry among good ones",
+      "accepted": false,
+      "value": [
+        {
+          "label": "Launch AgentForge",
+          "url": "https://openemr.example.test/launch.php?patient={patientId}"
+        },
+        {"label": "Bad", "url": "javascript:void({patientId})"}
+      ]
+    }
+  ],
+  "privacyGraceSeconds": [
+    {"case": "0", "accepted": true, "value": 0},
+    {"case": "30", "accepted": true, "value": 30},
+    {"case": "60", "accepted": true, "value": 60},
+    {"case": "900, the maximum", "accepted": true, "value": 900},
+    {"case": "901, over the maximum", "accepted": false, "value": 901},
+    {"case": "3600", "accepted": false, "value": 3600},
+    {"case": "negative", "accepted": false, "value": -1},
+    {"case": "fractional", "accepted": false, "value": 1.5}
+  ]
+}

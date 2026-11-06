@@ -76,6 +76,8 @@ describe('given a minimal valid environment', () => {
         maxSessionMs: 10 * 60 * 60 * 1000,
       },
       build: 'unknown',
+      spa: {patientApps: [], privacyGraceSeconds: 60},
+      warnings: [],
     });
     expect(config.oauth.clientSecret.reveal()).toBe(SECRET);
   });

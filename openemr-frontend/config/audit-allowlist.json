@@ -6,27 +6,27 @@
       "package": "@faker-js/faker",
       "in": ["openemr-frontend"],
       "scope": "dev",
-      "reason": "Dev-only, via @usebruno/cli 4.2.0 (latest) -> @usebruno/requests (^9.7.0; the fix is faker above 10.4.0, a major bump outside Bruno's range). Exploitable only when an attacker controls the template passed to helpers.fake; Bruno feeds it our own committed collection, which uses no {{$random*}} variables. Never bundled or shipped. npm's suggested fix (@usebruno/cli 4.1.0) is a downgrade that does not change this dependency.",
-      "reviewed": "2026-09-28",
-      "expires": "2026-10-28"
+      "reason": "Dev-only, via @usebruno/cli 4.2.0 (latest) -> @usebruno/requests (^9.7.0; the fix is faker above 10.4.0, a major bump outside Bruno's range). Exploitable only when an attacker controls the template passed to helpers.fake; Bruno feeds it our own committed collection, which uses no {{$random*}} variables. Never bundled or shipped. npm's suggested fix (@usebruno/cli 4.1.0) is a downgrade that does not change this dependency. Re-checked 2026-11-02: @usebruno/cli 4.3.0, the latest, carries the same versions, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-02",
+      "expires": "2026-12-02"
     },
     {
       "id": "GHSA-hmw2-7cc7-3qxx",
       "package": "form-data",
       "in": ["openemr-frontend"],
       "scope": "dev",
-      "reason": "Dev-only, pinned exactly (4.0.4) by @usebruno/cli 4.2.0 (latest; 4.1.0 pins the same). CRLF injection through multipart field names and filenames; our Bruno collection sends no multipart bodies (form-urlencoded only) and its names are our own. Never bundled or shipped. The fix (4.0.6) needs an npm override of Bruno's pin or a Bruno release.",
-      "reviewed": "2026-09-28",
-      "expires": "2026-10-28"
+      "reason": "Dev-only, pinned exactly (4.0.4) by @usebruno/cli 4.2.0 (latest; 4.1.0 pins the same). CRLF injection through multipart field names and filenames; our Bruno collection sends no multipart bodies (form-urlencoded only) and its names are our own. Never bundled or shipped. The fix (4.0.6) needs an npm override of Bruno's pin or a Bruno release. Re-checked 2026-11-02: @usebruno/cli 4.3.0, the latest, carries the same versions, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-02",
+      "expires": "2026-12-02"
     },
     {
       "id": "GHSA-2883-xcg3-v3hh",
       "package": "js-yaml",
       "in": ["openemr-frontend"],
       "scope": "dev",
-      "reason": "Dev-only, pinned exactly (4.3.1) by @usebruno/cli 4.2.0 and @usebruno/converters. CPU exhaustion on crafted YAML merge keys; Bruno parses only our own committed collection and environment files. Never bundled or shipped. The fix (4.3.2) needs an npm override of Bruno's pin or a Bruno release; npm's suggested downgrade to @usebruno/cli 4.1.0 (js-yaml ^4.1.1) would clear this one but keeps the form-data and faker findings.",
-      "reviewed": "2026-09-28",
-      "expires": "2026-10-28"
+      "reason": "Dev-only, pinned exactly (4.3.1) by @usebruno/cli 4.2.0 and @usebruno/converters. CPU exhaustion on crafted YAML merge keys; Bruno parses only our own committed collection and environment files. Never bundled or shipped. The fix (4.3.2) needs an npm override of Bruno's pin or a Bruno release; npm's suggested downgrade to @usebruno/cli 4.1.0 (js-yaml ^4.1.1) would clear this one but keeps the form-data and faker findings. Re-checked 2026-11-02: @usebruno/cli 4.3.0, the latest, carries the same versions, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-02",
+      "expires": "2026-12-02"
     },
     {
       "id": "GHSA-ph9p-34f9-6g65",
@@ -36,6 +36,78 @@
       "reason": "Dev-only, via gts 7.0.0 (latest) -> inquirer 7 -> external-editor 3 -> tmp ^0.0.33; npm reports no fix. Path traversal through caller-supplied prefix/postfix; reached only by gts's interactive init prompts, which no script or CI job runs (we use gts for its ESLint and Prettier config). Never bundled or shipped.",
       "reviewed": "2026-09-28",
       "expires": "2026-12-27"
+    },
+    {
+      "id": "GHSA-3pq3-5fj3-cg6v",
+      "package": "axios",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. HTTP/2 adapter ignores the configured DNS lookup and proxy; reached only with httpVersion 2, which neither Bruno's runner nor our collection ever sets, so every request goes through the HTTP/1.1 adapter, which honours them (including a system proxy Bruno picks up from the environment). Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-06",
+      "expires": "2026-12-06"
+    },
+    {
+      "id": "GHSA-542g-h47m-68v8",
+      "package": "axios",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. Unhandled 'error' on HTTP/2 session start crashes the process; HTTP/2 only (see GHSA-3pq3-5fj3-cg6v), and the worst case is a failed local bru run. Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-06",
+      "expires": "2026-12-06"
+    },
+    {
+      "id": "GHSA-c29m-xwm3-cm6r",
+      "package": "axios",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. ReDoS in the data: URL parser; our collection requests only our own OpenEMR and token-handler URLs, never a data: URL, and the worst case is a hung local bru run. Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-06",
+      "expires": "2026-12-06"
+    },
+    {
+      "id": "GHSA-m8m8-qj5v-23w3",
+      "package": "axios",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. Socket hijack through an inherited createConnection; needs a separate prototype pollution inside the Bruno process, which runs only our committed collection and its scripts. Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-06",
+      "expires": "2026-12-06"
+    },
+    {
+      "id": "GHSA-mghh-pgcx-3jjj",
+      "package": "axios",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. ReDoS in proxy-bypass host normalisation via a redirect Location (reachable when Bruno honours a system proxy from the environment); the collection calls only our own OpenEMR and token handler, so every Location comes from our own servers, and the worst case is a hung local bru run. Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-06",
+      "expires": "2026-12-06"
+    },
+    {
+      "id": "GHSA-r4gj-5m52-g5wh",
+      "package": "axios",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. maxRedirects: 0 not enforced by the fetch adapter; Bruno runs axios on the Node http adapter (it never selects 'fetch'), where the limit holds, against our own servers. Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-06",
+      "expires": "2026-12-06"
+    },
+    {
+      "id": "GHSA-x97p-jq2g-jp4f",
+      "package": "axios",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. Prototype-pollution gadget in toFormData options; needs a separate prototype pollution in the Bruno process, and our collection sends no multipart bodies (form-urlencoded only). Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
+      "reviewed": "2026-11-06",
+      "expires": "2026-12-06"
+    },
+    {
+      "id": "GHSA-xcx6-jx8p-x3h5",
+      "package": "@azure/msal-node",
+      "in": ["openemr-frontend"],
+      "scope": "dev",
+      "reason": "Dev-only, 6.0.1 via @usebruno/cli 4.2.0 -> @usebruno/requests (^4.13.0) -> @azure/identity 4.13.3, whose latest (4.14.0) still asks for msal-node ^6.0.0; the fix (7.1.0) is a major bump outside that range. The flaw is in msal-node's auth_code flow (acquireTokenByCode). Bruno loads @azure/identity only to read Azure Key Vault secrets, with ClientSecretCredential or AzureCliCredential, and our collection configures no Azure secret provider. Never bundled or shipped; the token handler does not use msal.",
+      "reviewed": "2026-10-24",
+      "expires": "2026-11-23"
     }
   ]
 }

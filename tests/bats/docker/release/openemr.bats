@@ -73,3 +73,8 @@ setup() {
     assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'K8S.*worker'
     assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'AUTHORITY=no'
 }
+
+@test "openemr.sh: skips post-wait try_become_leader when already leader" {
+    grep -A6 'Try one more time to become leader' "${SCRIPT_DIR}/openemr.sh" \
+        | grep -q 'AUTHORITY}" != "yes"'
+}

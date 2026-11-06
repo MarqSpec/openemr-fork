@@ -10,10 +10,11 @@ import {server} from '../test/msw_server';
 import {SessionProvider, useSession} from './SessionProvider';
 
 // Automatic logoff (W-6) and the privacy screen (W-7), on fake timers.
-// reference: REQUIREMENTS.md FR-AUTH-4, FR-UI-4, NFR-SEC-3 · INTERFACES.md API-42, API-44, API-46 ·
-// REQUIREMENTS.md W-6, W-7 · a separate change (note 87130), a separate change
+// reference: REQUIREMENTS.md FR-AUTH-4, FR-UI-4, NFR-SEC-3 · INTERFACES.md API-42, API-44, API-46,
+// API-48 · REQUIREMENTS.md W-6, W-7 · a separate change (note 87130), a separate change
 
 const SESSION_URL = '/bff/session';
+const CONFIG_URL = '/bff/config';
 const ACTIVITY_URL = '/bff/session/activity';
 const PATIENT_URL = `/bff/fhir/Patient/${TEST_PATIENT_ID}`;
 const PATIENT_FAMILY = 'Zzphi-Testperson';
@@ -52,6 +53,8 @@ interface Backend {
   keepAliveHangs: boolean;
   /** The keep-alive gets no HTTP answer at all: the tablet is offline or the connection drops. */
   keepAliveNetworkError: boolean;
+  /** The privacy grace the token handler's environment sets (PRIVACY_GRACE_SECONDS), served by API-48. */
+  privacyGraceSeconds: number;
 }
 
 /** A response that never comes; the request ends only if the client aborts it. */
@@ -59,7 +62,7 @@ function neverAnswer(): Promise<Response> {
   return new Promise<Response>(() => undefined);
 }
 
-function backend(): Backend {
+function backend(overrides: Partial<Backend> = {}): Backend {
   const state: Backend = {
     sessionReads: 0,
     patientReads: 0,
@@ -71,8 +74,16 @@ function backend(): Backend {
     sessionFailure: 'none',
     keepAliveHangs: false,
     keepAliveNetworkError: false,
+    privacyGraceSeconds: 60,
+    ...overrides,
   };
   server.use(
+    http.get(CONFIG_URL, () =>
+      HttpResponse.json({
+        patientApps: [],
+        privacyGraceSeconds: state.privacyGraceSeconds,
+      }),
+    ),
     http.get(SESSION_URL, () => {
       state.sessionReads += 1;
       if (state.sessionFailure === 'server') {
@@ -144,7 +155,7 @@ function Probe(): ReactNode {
 async function renderSignedIn(state: Backend) {
   const signOut = vi.fn();
   render(
-    <SessionProvider signOut={signOut} privacyGraceSeconds={60}>
+    <SessionProvider signOut={signOut}>
       <Probe />
     </SessionProvider>,
   );
@@ -638,6 +649,58 @@ describe('given a signed-in chart and the app is hidden (W-7)', () => {
     // A frozen page runs no timers; only the clock moves.
     vi.setSystemTime(Date.now() + 5 * MINUTE);
     setVisibility('visible');
+
+    expect(signOut).toHaveBeenCalledExactlyOnceWith({reason: 'idle'});
+    expect(document.body).not.toHaveTextContent(PATIENT_FAMILY);
+  });
+});
+
+describe('given sign-in completes while the page is already hidden (W-7)', () => {
+  it('when the session becomes active, then the cover is up and the grace clock is running, with no later visibilitychange (guards PHI painted into a hidden page)', async () => {
+    visibility = 'hidden';
+    backend();
+    const signOut = vi.fn();
+    render(
+      <SessionProvider signOut={signOut}>
+        <Probe />
+      </SessionProvider>,
+    );
+
+    expect(await screen.findByText('Patient data hidden')).toBeVisible();
+    expect(
+      screen.getByRole('heading', {name: PATIENT_FAMILY, hidden: true}),
+    ).not.toBeVisible();
+    expect(signOut).not.toHaveBeenCalled();
+
+    await advance(59_000);
+    expect(signOut).not.toHaveBeenCalled();
+
+    await advance(2_000);
+
+    expect(signOut).toHaveBeenCalledExactlyOnceWith({reason: 'idle'});
+    expect(document.body).not.toHaveTextContent(PATIENT_FAMILY);
+  });
+});
+
+describe('given the token handler sets a 10 s privacy grace at run time (PRIVACY_GRACE_SECONDS)', () => {
+  it('when the app is hidden for 9 s, then it comes back to the chart, still signed in', async () => {
+    const state = backend({privacyGraceSeconds: 10});
+    const {signOut} = await renderSignedIn(state);
+    setVisibility('hidden');
+
+    await advance(9_000);
+    setVisibility('visible');
+
+    expect(screen.getByRole('heading', {name: PATIENT_FAMILY})).toBeVisible();
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('when the app stays hidden for 11 s, then it signs out — the served grace, not the 60 s default (guards a grace baked into the image)', async () => {
+    const state = backend({privacyGraceSeconds: 10});
+    const {signOut} = await renderSignedIn(state);
+    setVisibility('hidden');
+
+    await advance(11_000);
 
     expect(signOut).toHaveBeenCalledExactlyOnceWith({reason: 'idle'});
     expect(document.body).not.toHaveTextContent(PATIENT_FAMILY);

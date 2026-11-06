@@ -11,7 +11,7 @@ import {
 // Staging tier (CONVENTIONS.md): the patient-apps slot launches AgentForge from the deployed SPA for the
 // open patient, through the module's own uuid-keyed launch — no stubs. Skipped unless the staging URL, a synthetic
 // test user, a synthetic demo patient's uuid and the sidecar's origin come from the environment; skips at run time
-// when the deployed build renders no "Patient apps" group (built without VITE_PATIENT_APPS, or with an invalid one).
+// when the deployed SPA renders no "Patient apps" group (the service's PATIENT_APPS unset or invalid).
 // Never hard-coded, never printed.
 // REQUIREMENTS.md FR-APP-1, NFR-SEC-1, NFR-CON-1, INTERFACES.md API-47 ·
 // REQUIREMENTS.md BUG-24
@@ -56,7 +56,7 @@ test.describe('given the deployed SPA built with AgentForge as a patient app (st
     const slot = page.getByRole('group', {name: 'Patient apps'});
     test.skip(
       (await slot.count()) === 0,
-      'staging tier: the deployed SPA renders no "Patient apps" group — rebuild it with the VITE_PATIENT_APPS build arg naming AgentForge (every entry valid)',
+      'staging tier: the deployed SPA renders no "Patient apps" group — set PATIENT_APPS on the staging frontend service (agent-forge) naming AgentForge, every entry valid, and redeploy',
     );
     const link = slot.getByRole('link', LAUNCH_LINK);
     const href = String(await link.getAttribute('href'));

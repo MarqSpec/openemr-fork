@@ -29,7 +29,7 @@ import {
 } from './resources';
 
 // One query per inventory row (one for API-15/16), keyed by the factory. Components use these hooks and never call `fetch`
-// (NFR-CON-2). reference: INTERFACES.md API-11…21
+// (NFR-CON-2). reference: INTERFACES.md API-11…24
 
 export const patientSearchQuery = (search: PatientSearch, page: number) =>
   queryOptions({

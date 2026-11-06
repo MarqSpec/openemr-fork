@@ -13,24 +13,33 @@ import {flushSync} from 'react-dom';
 
 import {sessionQuery} from '../api/auth/hooks';
 import {ApiError} from '../api/api_error';
+import {runtimeConfigQuery} from '../api/config/hooks';
+import type {RuntimeConfig} from '../api/config/runtime_config';
 import {createQueryClient} from '../api/query_client';
 import {AutoLogoff, type SessionClock} from './AutoLogoff';
 import {PrivacyCover, usePrivacyCover} from './PrivacyCover';
-import {PRIVACY_GRACE_SECONDS} from './session_config';
 import {submitSignOut, type SignOutOptions} from './sign_out';
 
-// reference: REQUIREMENTS.md FR-AUTH-3, FR-AUTH-4, FR-AUTH-5, FR-UI-3, FR-UI-4 · INTERFACES.md API-42 ·
-// a separate change (note 85517) · a separate change (note 87776: back/forward cache) · a separate change (note 87130) · FR-PWA-4, a separate change (offline)
+// reference: REQUIREMENTS.md FR-AUTH-3, FR-AUTH-4, FR-AUTH-5, FR-UI-3, FR-UI-4, FR-APP-1 · INTERFACES.md
+// API-42, API-48 · a separate change (note 85517) · a separate change (note 87776: back/forward cache) · a separate change (note 87130) · FR-PWA-4,
+// a separate change (offline) · a separate change (runtime config)
 
-/** What the app knows about the session; the shell draws the sign-in screen for everything but `signed-in`. */
+/**
+ * What the app knows about the session; the shell draws the sign-in screen for everything but `signed-in`, which
+ * also carries this environment's runtime config (API-48): nothing signed-in renders before the privacy grace is known.
+ */
 export type SessionState =
   | {readonly kind: 'checking'}
-  | {readonly kind: 'signed-in'; readonly displayName: string | null}
+  | {
+      readonly kind: 'signed-in';
+      readonly displayName: string | null;
+      readonly config: RuntimeConfig;
+    }
   /** `ended`: a live session ended under the user (a 401 after sign-in), rather than nobody having signed in. */
   | {readonly kind: 'signed-out'; readonly ended: boolean}
-  /** No connection: the read never got an answer. Retried by the user, or by itself when the device is back online. */
+  /** No connection: a read never got an answer. Retried by the user, or by itself when the device is back online. */
   | {readonly kind: 'offline'; readonly retry: () => void}
-  /** The session read failed with an answer that says nothing (5xx, malformed): unknown until the user retries. */
+  /** The session or config read failed with an answer that says nothing (5xx, malformed): unknown until a retry. */
   | {readonly kind: 'unavailable'; readonly retry: () => void};
 
 const SessionContext = createContext<SessionState>({kind: 'checking'});
@@ -52,14 +61,13 @@ export function useSession(): SessionState {
  * session afresh. By `pagehide` the navigation has committed, so this cannot cancel the sign-out form post.
  *
  * While someone is signed in it also runs automatic logoff (W-6, {@link AutoLogoff}) and the privacy cover (W-7,
- * {@link usePrivacyCover}). Either one ending the session empties the cache, unmounts patient data synchronously and
+ * {@link usePrivacyCover}), whose grace is the one the token handler serves (API-48). Either one ending the session empties the cache, unmounts patient data synchronously and
  * then signs out through the same form post as the account menu.
  */
 export function SessionProvider({
   children,
   reload = reloadPage,
   signOut = submitSignOut,
-  privacyGraceSeconds = PRIVACY_GRACE_SECONDS,
 }: SessionProviderProps) {
   const [over, setOver] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -103,7 +111,7 @@ export function SessionProvider({
   const signedIn = state.kind === 'signed-in';
   const covered = usePrivacyCover({
     active: signedIn,
-    graceMs: privacyGraceSeconds * 1000,
+    graceMs: signedIn ? state.config.privacyGraceSeconds * 1000 : 0,
     onExpire: endSession,
   });
 
@@ -154,8 +162,6 @@ interface SessionProviderProps {
   readonly reload?: () => void;
   /** Signs out by form post (API-43) after an automatic logoff; tests pass a spy (jsdom cannot submit a form). */
   readonly signOut?: (options?: SignOutOptions) => void;
-  /** Seconds the app may stay hidden before it signs out (W-7); the build's `VITE_PRIVACY_GRACE_SECONDS`. */
-  readonly privacyGraceSeconds?: number;
 }
 
 function reloadPage(): void {
@@ -163,8 +169,10 @@ function reloadPage(): void {
 }
 
 /**
- * Reads API-42 once (sessionQuery) while the session may be live, and reports what it learns. It unmounts on the
- * first 401, so nothing re-creates the session query in the cache that 401 just cleared.
+ * Reads API-42 (sessionQuery) and API-48 (runtimeConfigQuery) once each while the session may be live, and reports
+ * what it learns: signed in only once both have answered. A 401 is signed out whatever the config says; no answer
+ * to either is offline; any other failure of either is unknown. Retrying re-reads only what failed. It unmounts on
+ * the first 401, so nothing re-creates the session query in the cache that 401 just cleared.
  */
 function SessionReader({
   onRead,
@@ -172,30 +180,45 @@ function SessionReader({
   readonly onRead: (state: SessionState, clock: SessionClock | null) => void;
 }) {
   const query = useQuery(sessionQuery());
+  const config = useQuery(runtimeConfigQuery());
   const {isSuccess, isError, data, dataUpdatedAt, error, refetch} = query;
+  const {data: configData, error: configError, refetch: refetchConfig} = config;
 
   const state = useMemo((): SessionState => {
-    if (isSuccess) return {kind: 'signed-in', displayName: data.displayName};
-    if (!isError) return CHECKING;
     // A 401 is the provider's to handle (it is about to unmount this reader); never offer a retry for it.
     if (error instanceof ApiError && error.failure.kind === 'session-over') {
       return {kind: 'signed-out', ended: false};
     }
-    if (error instanceof ApiError && error.failure.kind === 'network-error') {
+    if (isSuccess && configData !== undefined) {
       return {
-        kind: 'offline',
-        retry: () => {
-          void refetch();
-        },
+        kind: 'signed-in',
+        displayName: data.displayName,
+        config: configData,
       };
     }
-    return {
-      kind: 'unavailable',
-      retry: () => {
-        void refetch();
-      },
+    const failures = [isError ? error : null, configError].filter(
+      failure => failure !== null,
+    );
+    if (failures.length === 0) return CHECKING;
+    const retry = () => {
+      if (isError) void refetch();
+      if (configError !== null) void refetchConfig();
     };
-  }, [isSuccess, isError, data, error, refetch]);
+    const offline = failures.some(
+      failure =>
+        failure instanceof ApiError && failure.failure.kind === 'network-error',
+    );
+    return offline ? {kind: 'offline', retry} : {kind: 'unavailable', retry};
+  }, [
+    isSuccess,
+    isError,
+    data,
+    error,
+    refetch,
+    configData,
+    configError,
+    refetchConfig,
+  ]);
 
   const clock = useMemo(
     (): SessionClock | null =>

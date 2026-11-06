@@ -254,7 +254,7 @@ auto_setup() {
     prepareVariables
 
     # Update heartbeat before starting setup (if in swarm mode)
-    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
 
     # Only set permissions if not in EASY_DEV_MODE (optimized: use -exec {} + instead of \; for better performance)
     if [[ "${EASY_DEV_MODE}" != "yes" ]]; then
@@ -284,7 +284,7 @@ auto_setup() {
     } > auto_configure.ini
 
     # Update heartbeat right before long-running PHP command
-    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
 
     # Run auto_configure with optimized PHP settings.
     # Drop privileges to apache: auto_configure.php goes through the
@@ -302,7 +302,7 @@ auto_setup() {
         php /var/www/localhost/htdocs/auto_configure.php -c auto_configure.ini -f "${CONFIGURATION}" || return 1
 
     # Update heartbeat after PHP execution completes
-    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
 
     # Remove temporary file cache directory and auto_configure.ini
     rm -rf "${TMP_FILE_CACHE_LOCATION}"
@@ -316,21 +316,21 @@ auto_setup() {
     fi
 
     # Update heartbeat after configuration verification
-    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
 
     if [[ "${DEMO_MODE}" = "standard" ]]; then
         demoData
-        [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+        [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
     fi
 
     if [[ "${SQL_DATA_DRIVE}" != "" ]]; then
         sqlDataDrive
-        [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+        [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
     fi
 
     setGlobalSettings
     # Final heartbeat update after setup completion
-    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+    [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
 }
 
 # ============================================================================
@@ -521,9 +521,43 @@ try_become_leader() {
 # This lets followers know the leader is still alive and working.
 update_leader_heartbeat() {
     local leader_file="${OE_ROOT}/sites/docker-leader"
-    if [[ "${AUTHORITY}" = "yes" ]]; then
-        date +%s > "${leader_file}" 2>/dev/null || true
+    if [[ "${AUTHORITY}" != "yes" ]]; then
+        return 0
     fi
+    date +%s > "${leader_file}"
+}
+
+# Background heartbeat during long leader work (clone/composer/npm/webpack).
+# Without it a startup longer than LEADER_TIMEOUT (default 300s) looks like a
+# crashed leader and a follower takes over.
+start_leader_heartbeat() {
+    if [[ "${AUTHORITY}" != "yes" ]] || [[ "${SWARM_MODE}" != "yes" ]]; then
+        return 0
+    fi
+    if [[ -n "${LEADER_HEARTBEAT_PID:-}" ]]; then
+        return 0
+    fi
+    (
+        # The subshell inherits set -euo pipefail. A transient write error
+        # (shared sites volume) must not kill the loop.
+        while true; do
+            if ! update_leader_heartbeat; then
+                echo "Warning: leader heartbeat write failed; retrying on the next tick" >&2
+            fi
+            sleep "${LEADER_HEARTBEAT_INTERVAL:-30}"
+        done
+    ) &
+    LEADER_HEARTBEAT_PID=$!
+}
+
+# Stops the background heartbeat started by start_leader_heartbeat.
+stop_leader_heartbeat() {
+    if [[ -z "${LEADER_HEARTBEAT_PID:-}" ]]; then
+        return 0
+    fi
+    kill "${LEADER_HEARTBEAT_PID}" 2>/dev/null || true
+    wait "${LEADER_HEARTBEAT_PID}" 2>/dev/null || true
+    unset LEADER_HEARTBEAT_PID
 }
 
 # Waits for the swarm leader to finish setup before reading shared configuration.
@@ -550,9 +584,11 @@ wait_for_swarm_completion() {
             (( waited += 10 ))
         done
 
-        # Try one more time to become leader (in case leader died just as we timed out)
+        # Try one more time to become leader (in case leader died just as we timed out).
+        # Skip when we already hold AUTHORITY: try_become_leader's noclobber write
+        # fails against our own file and would demote us.
         # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
-        if [[ ! -f "${OE_ROOT}/sites/docker-completed" ]]; then
+        if [[ "${AUTHORITY}" != "yes" ]] && [[ ! -f "${OE_ROOT}/sites/docker-completed" ]]; then
             try_become_leader
             if [[ "${AUTHORITY}" = "yes" ]]; then
                 echo "Promoted to leader after waiting period"
@@ -576,7 +612,7 @@ wait_for_swarm_completion() {
 prepare_swarm_leader() {
     if [[ "${AUTHORITY}" = "yes" ]]; then
         touch "${OE_ROOT}/sites/docker-initiated"
-        update_leader_heartbeat
+        update_leader_heartbeat || true
 
         # Restore swarm-pieces if needed (for swarm mode with empty volumes)
         if [[ ! -f /etc/ssl/openssl.cnf ]]; then
@@ -616,7 +652,10 @@ handle_swarm_mode() {
 # SWARM MODE COORDINATION (MAIN EXECUTION)
 # ============================================================================
 handle_swarm_mode
-[[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
+[[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat || true
+# Keep the leader file fresh through git clone + composer/npm/webpack.
+start_leader_heartbeat
+trap 'stop_leader_heartbeat' EXIT
 
 # ============================================================================
 # SSL/TLS CERTIFICATE CONFIGURATION
@@ -860,6 +899,8 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
 
     cd /var/www/localhost/htdocs
 fi
+
+stop_leader_heartbeat
 
 # Two-pass kcov-wrapper.sh sets FLEX_BUILD_ONLY=yes on its first pass so the
 # heavy build (composer + npm + napa + webpack + phing) runs OUTSIDE kcov.

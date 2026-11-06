@@ -73,6 +73,8 @@ detail are in the [token handler README](openemr-frontend/bff/README.md).
 - **Sign-in** (API-40, API-41): the SPA posts `/bff/login`; the token handler stores a PKCE handshake and redirects
   the browser to OpenEMR's login and consent; OpenEMR redirects back to `/bff/callback`; the token handler
   exchanges the code, verifies the `id_token`, sets the session cookie and returns to the SPA.
+- **Runtime config** (API-48): on every start the SPA reads `/bff/config` beside `/bff/session` for the patient
+  apps and the privacy grace; no patient data is shown until both have answered. One image serves every environment.
 - **Reading a chart** (API-44): each card's query calls `/bff/fhir/...`; the token handler checks the allow-list,
   the origin and the session, waits for an upstream slot (4 at once, 3 per session — FHIR is slow,
   [BUG-28](REQUIREMENTS.md#bug-28)), and forwards with the session's bearer. A read counts as activity.
@@ -155,18 +157,19 @@ ships without an OpenEMR release.
 ## 4. Changes to upstream OpenEMR
 
 The frontend changes nothing in OpenEMR ([NFR-CON-1](REQUIREMENTS.md#nfr-con-1)). The AgentForge integration and
-the deployment do change a few upstream files; each change is small and self-contained:
+the deployment do change a few upstream files. These are the main ones; each change is small and self-contained:
 
 | File | Change | Why |
 |---|---|---|
 | `src/Common/Session/SessionUtil.php`, `src/RestControllers/AuthorizationController.php`, `library/auth.inc.php` | A short-lived, single-use `SameSite=Lax` **EHR-launch bridge cookie**, read by the authorization controller when the `SameSite=Strict` core session cookie is withheld on a cross-site redirect, and cleared at logout | Lets an EHR launch (the AgentForge copilot) complete its OAuth exchange without OpenEMR showing a second login |
-| `src/Common/Command/Register.php`, `src/Core/OEGlobalsBag.php` | `openemr:register` can register, install and enable a custom module in one idempotent step | The container registers and enables the AgentForge module on boot |
+| `src/Common/Command/Register.php`, `src/Core/OEGlobalsBag.php` | `openemr:register` can register, install and enable a custom module in one idempotent step | The container registers and enables the AgentForge module at first-time setup |
 | `src/Services/Background/SymfonyBackgroundServiceSpawner.php`, `docker/release/openemr.conf` | Forward `AGENTFORGE_INGEST_URI` and `AGENTFORGE_INGEST_CATEGORY_MAP` into background-service child processes (`PassEnv`) | Under mod_php, container variables otherwise never reach the document-ingest job |
+| `src/Services/Background/SymfonyBackgroundServiceSpawner.php` | Relay a successful background-service child's stderr to the parent's log, as one sanitised, truncated warning | Each service runs in a child process whose own log lines (written to stderr) were otherwise discarded, so they never reached the container log |
 | `src/RestControllers/TokenIntrospectionRestController.php` | Correct an operator-precedence bug in the `is_enabled` check | Token introspection treated disabled clients wrongly |
 | `src/Services/FHIR/FhirPatientService.php` | `Patient.active` mirrors `deceased[x]` | Was always `true` ([BUG-6](REQUIREMENTS.md#bug-6)) |
 | `templates/oauth2/oauth2-login.html.twig`, `oauth2-base.html.twig` | Allow pinch-zoom; label the login fields | Accessibility of the OAuth login the frontend's users see ([BUG-39](REQUIREMENTS.md#bug-39), [BUG-40](REQUIREMENTS.md#bug-40)) |
 | `docker/railway/Dockerfile`, `railway.json` | An image built from **this** repository's source (derived from upstream's `docker/release/Dockerfile`, which clones upstream instead) | The deployable OpenEMR image ([DEPLOYMENT.md](DEPLOYMENT.md) §3) |
-| `docker/release/openemr.sh` | Fixes to first-time setup on a fresh volume; one-time setup scripts removed unless `RUN_DB_UPGRADE=yes`; bundled custom modules registered and enabled on boot; the AgentForge synthetic seed on every boot where declared, refused in production | Reliable container boots and reproducible demo environments |
+| `docker/release/openemr.sh` | Fixes to first-time setup on a fresh volume and to upgrade detection; one-time setup scripts removed, `RUN_DB_UPGRADE=yes` keeping only `sql_patch.php`, `sql_upgrade.php`, `ippf_upgrade.php` and `acl_upgrade.php`; bundled custom modules registered and enabled at first-time setup; the AgentForge synthetic seed at boot where declared ([DEPLOYMENT.md](DEPLOYMENT.md) §5), refused on Railway's production environment | Reliable container boots and reproducible demo environments |
 | `phpstan.neon.dist`, `rector.php`, `.phpstan/` baselines | Static-analysis configuration for the new code | — |
 
 The upstream copyright and licence headers in these files are unchanged.
@@ -180,19 +183,34 @@ The module (`OpenEMR\Modules\AgentForge`) hooks OpenEMR's event dispatcher; it d
   patient; it opens in a modal frame or a new tab (`agentforge_launch_mode`). A launch whose `/launch` and OAuth
   callback land on different hosts loses its session, so every address must be the same front door
   ([DEPLOYMENT.md](DEPLOYMENT.md) §5).
-- **Day's Agenda** — a `MenuEvent` listener adds a menu item that opens the copilot's roster launch
+- **Daily Agenda** — a `MenuEvent` listener adds a menu item that opens the copilot's roster launch
   (`agentforge_agenda_launch_uri`, falling back to the launch URI) in its own tab.
 - **Drill-down launch** — `public/agenda-drilldown-launch.php?patient={uuid}` resolves a patient by FHIR id,
   re-checks the `patients/demo` ACL, sets the bridge cookie (§4) and redirects to the patient-scoped launch in one
   top-level navigation. The frontend's Patient apps slot links here.
 - **Document ingest** — a registered OpenEMR background service (`agentforge_ingest_new_documents`) scans documents
   newer than a watermark whose category is mapped to a document type, forwards each to the copilot's ingest
-  address, and advances the watermark. With no ingest address or no category map it does nothing (fail closed).
+  address, and advances the watermark. With no ingest address or no usable category map it forwards nothing (fail
+  closed) and logs one warning naming the setting to fix — once per distinct reason, not every run. A failed
+  forward logs the document id and the HTTP status or exception class (no patient data). A document whose
+  file cannot be read logs its id and the exception class, never the exception message, which can quote the file
+  path. The watermark never moves past a failed document: it stops one id below the lowest failure, so the next run
+  scans that document again. While it is held, every later document is sent again on each run, which the sidecar's
+  content-hash idempotence makes harmless but not free: a quiet clinic re-sends a few files on each run, a
+  busy one many. Nothing in the image schedules the runs ([DEPLOYMENT.md](DEPLOYMENT.md) §5). A held document is given up on, and the watermark moves past it, after 30 counted runs, so one bad
+  document cannot hold the queue back. What counts depends on why it failed. A sidecar rejection counts only if the
+  sidecar newly accepted another document in that run (one above every id it had accepted before; a 200 for a
+  document merely re-sent proves nothing), so a sidecar outage counts against no one. A file that could not be read
+  counts only if another file was read in that run, so a storage outage (volume, CouchDB) counts
+  against no one either. A patient with no FHIR UUID, an empty file and a document with no UUID of its own are facts
+  about the document and count every run. An error line gives the document id and the reason, and the document must
+  be re-uploaded once the cause is fixed.
 - **Settings** — `AgentForgeGlobalConfig` reads each setting from OpenEMR's `globals` table (the module's settings
   form) and falls back to an environment variable.
 - **Seeders** — idempotent CLI scripts (`scripts/`) and their rules (`src/Seed/`) create the synthetic AF-DEMO
   cardiology cohort, rolling appointments, care teams, and an integration-test `client_credentials` client. The
-  container runs them on every boot only where declared, never in production.
+  container runs them at boot only where declared ([DEPLOYMENT.md](DEPLOYMENT.md) §5) and refuses them on Railway's
+  production environment. Never declare them in production anywhere else.
 
 ## 6. Data, state and scaling
 

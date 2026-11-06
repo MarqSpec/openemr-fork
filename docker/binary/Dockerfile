@@ -22,8 +22,10 @@ ARG ALPINE_VERSION=3.22
 FROM alpine:${ALPINE_VERSION} AS base
 
 # OpenEMR version and binary release information
-ARG OPENEMR_VERSION=7_0_4
-ARG BINARY_RELEASE_DATE=12292025
+# PHP2Shell (CVE-2026-109618 / CVE-2026-109619) needs PHP >= 8.5.12. The forge's first Linux build with it
+# is the 10212026 one, which only exists for OpenEMR 8.4.1.
+ARG OPENEMR_VERSION=8_4_1
+ARG BINARY_RELEASE_DATE=10212026
 ARG PHP_VERSION=8.5
 ENV OPENEMR_VERSION=${OPENEMR_VERSION}
 ENV PHP_VERSION=${PHP_VERSION}
@@ -108,6 +110,14 @@ RUN ARCH_SUFFIX="${TARGETARCH}" \
     && mv php-cli /usr/local/bin/php \
     && ln -sf /usr/local/bin/php /usr/local/bin/php-cli
 
+# PHP2Shell (CVE-2026-109618 / CVE-2026-109619, unauthenticated RCE, exploited in the wild) is fixed in
+# PHP 8.5.12. The static binaries above come from whichever forge release BINARY_RELEASE_DATE names, so fail
+# the build if the pin (or a --build-arg override) brings back anything older.
+ARG PHP_MIN_VERSION=8.5.12
+RUN php -r 'if (version_compare(PHP_VERSION, getenv("PHP_MIN_VERSION"), "<")) { fwrite(STDERR, "PHP " . PHP_VERSION . " is older than " . getenv("PHP_MIN_VERSION") . " (PHP2Shell, CVE-2026-109618/-109619); bump BINARY_RELEASE_DATE to a fixed forge release\n"); exit(1); }' \
+    && test "$(php-fpm -v | head -n 1 | cut -d ' ' -f 2)" = "$(php -r 'echo PHP_VERSION;')" \
+    || (echo "ERROR: php-fpm and php-cli report different PHP versions" && exit 1)
+
 # Install Composer (PHP dependency manager) for OpenEMR package installation
 # Required by the CI/CD test suite
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin --filename=composer
@@ -130,17 +140,31 @@ RUN ARCH_SUFFIX="${TARGETARCH}" \
     && /usr/local/bin/php -d memory_limit=512M -r "try { \$phar = new Phar('openemr.phar'); \$phar->extractTo('/tmp/openemr'); } catch (Exception \$e) { echo 'Error: ' . \$e->getMessage() . PHP_EOL; exit(1); }" \
     && rm openemr.phar
 
-# Download tests directory from GitHub to match the PHAR version
-# GitHub tag format is v7_0_4 (with v prefix and underscores)
-# Note: GitHub archives strip the 'v' prefix, so openemr-v7_0_4 becomes openemr-7_0_4
+# Fetch the tests directory and the PHPUnit configs from GitHub to match the PHAR version
+# GitHub tag format is v8_4_1 (with v prefix and underscores)
+# Note: a sparse shallow clone, not the tag's archive tarball: OpenEMR 8.x's .gitattributes marks tests/ and
+# phpunit*.xml export-ignore, so neither the archive nor the PHAR has them (the release image clones for the
+# same reason). Cone mode also checks out the top-level files, which is where phpunit*.xml live.
+# git is installed only for this step and removed again.
 RUN OPENEMR_TAG="v${OPENEMR_VERSION}" \
-    && cd /tmp \
-    && curl -fSL "https://github.com/openemr/openemr/archive/refs/tags/${OPENEMR_TAG}.tar.gz" -o openemr-source.tar.gz \
-    && OPENEMR_DIR="openemr-${OPENEMR_VERSION}" \
-    && tar -xzf openemr-source.tar.gz \
-    && test -d "${OPENEMR_DIR}/tests" || (echo "ERROR: tests directory not found in ${OPENEMR_DIR}" && exit 1) \
-    && mv "${OPENEMR_DIR}/tests" /tmp/openemr/tests \
-    && rm -rf "${OPENEMR_DIR}" openemr-source.tar.gz
+    && apk add --no-cache --virtual .openemr-tests-fetch git \
+    && git clone --quiet --depth 1 --branch "${OPENEMR_TAG}" --filter=blob:none --sparse https://github.com/openemr/openemr.git /tmp/openemr-source \
+    && git -C /tmp/openemr-source sparse-checkout set tests \
+    && test -d /tmp/openemr-source/tests || (echo "ERROR: tests directory not found in ${OPENEMR_TAG}" && exit 1) \
+    && test -f /tmp/openemr-source/phpunit.xml || (echo "ERROR: phpunit.xml not found in ${OPENEMR_TAG}" && exit 1) \
+    && mv /tmp/openemr-source/tests /tmp/openemr/tests \
+    && mv /tmp/openemr-source/phpunit*.xml /tmp/openemr/ \
+    && rm -rf /tmp/openemr-source \
+    && apk del --no-cache .openemr-tests-fetch
+
+# Install the CCDA service's node dependencies, as the release image does: the PHAR ships ccdaservice/ without
+# node_modules, and 8.x's CCDA, schematron and QRDA paths (and their services tests) need them. git is for the
+# package's github: dependency; both it and build-base are removed again in the same layer.
+RUN apk add --no-cache --virtual .ccdaservice-build build-base git \
+    && cd /tmp/openemr/ccdaservice \
+    && npm install --unsafe-perm \
+    && npm cache clean --force \
+    && apk del --no-cache .ccdaservice-build
 
 # ============================================================================
 # OPENEMR SETUP AND PERMISSIONS
@@ -236,7 +260,16 @@ COPY upgrade/docker-version \
      upgrade/fsupgrade-6.sh \
      upgrade/fsupgrade-7.sh \
      upgrade/fsupgrade-8.sh \
+     upgrade/fsupgrade-9.sh \
+     upgrade/fsupgrade-10.sh \
+     upgrade/fsupgrade-11.sh \
      /root/
+
+# The same file also marks the version of the code in the webroot. openemr.sh's
+# check_upgrade runs the fsupgrade scripts only when this matches
+# /root/docker-version, so it has to come with the image: a container started
+# from a new image on an old sites/ volume would otherwise never upgrade (#153).
+COPY upgrade/docker-version /var/www/localhost/htdocs/openemr/docker-version
 
 # Set upgrade scripts as executable (read and execute for owner only)
 RUN chmod 500 \
@@ -247,7 +280,10 @@ RUN chmod 500 \
     /root/fsupgrade-5.sh \
     /root/fsupgrade-6.sh \
     /root/fsupgrade-7.sh \
-    /root/fsupgrade-8.sh
+    /root/fsupgrade-8.sh \
+    /root/fsupgrade-9.sh \
+    /root/fsupgrade-10.sh \
+    /root/fsupgrade-11.sh
 
 # ============================================================================
 # APACHE AND PHP-FPM RUNTIME DIRECTORIES
