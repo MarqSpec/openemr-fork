@@ -99,15 +99,6 @@
       "reason": "Dev-only, pinned exactly (1.18.0) by @usebruno/cli 4.2.0 and its @usebruno/js and @usebruno/requests (4.2.1, the latest, pins the same); the SPA and the token handler do not use axios. The fix (1.20.0) needs an npm override of Bruno's pin or a Bruno release. Never bundled or shipped. Prototype-pollution gadget in toFormData options; needs a separate prototype pollution in the Bruno process, and our collection sends no multipart bodies (form-urlencoded only). Re-checked 2026-11-06: @usebruno/cli 4.3.0, the latest, still pins axios 1.18.0, as do its @usebruno/js 0.55.0 and @usebruno/requests 0.22.0, so upgrading Bruno does not clear it.",
       "reviewed": "2026-11-06",
       "expires": "2026-12-06"
-    },
-    {
-      "id": "GHSA-xcx6-jx8p-x3h5",
-      "package": "@azure/msal-node",
-      "in": ["openemr-frontend"],
-      "scope": "dev",
-      "reason": "Dev-only, 6.0.1 via @usebruno/cli 4.2.0 -> @usebruno/requests (^4.13.0) -> @azure/identity 4.13.3, whose latest (4.14.0) still asks for msal-node ^6.0.0; the fix (7.1.0) is a major bump outside that range. The flaw is in msal-node's auth_code flow (acquireTokenByCode). Bruno loads @azure/identity only to read Azure Key Vault secrets, with ClientSecretCredential or AzureCliCredential, and our collection configures no Azure secret provider. Never bundled or shipped; the token handler does not use msal.",
-      "reviewed": "2026-10-24",
-      "expires": "2026-11-23"
     }
   ]
 }

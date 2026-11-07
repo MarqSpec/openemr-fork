@@ -125,7 +125,7 @@ railway_digests() {
 }
 
 # ghcr_name: ghcr.io/<owner>/<repo> from GITHUB_REPOSITORY, lower case: the registry refuses a reference with capitals,
-# and GITHUB_REPOSITORY keeps the owner's. (The scaffold lower-cases the IMAGES it writes into the workflows.)
+# and GITHUB_REPOSITORY keeps the owner's.
 ghcr_name() { printf 'ghcr.io/%s' "$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"; }
 
 deploy_railway() {

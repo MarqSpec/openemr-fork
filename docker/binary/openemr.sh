@@ -192,13 +192,15 @@ is_configured() {
 # SWARM MODE COORDINATION FUNCTIONS
 # ============================================================================
 # When running multiple containers (swarm mode), coordinate to ensure only
-# one container performs the initial setup to avoid conflicts.
+# one container performs the initial setup or an upgrade to avoid conflicts.
 
-# Returns whether we should wait for the leader to finish setup.
-# Returns 0 (wait) if setup is not complete, 1 (don't wait) if complete.
+# Returns whether we should wait for the leader to finish.
+# Returns 0 (wait) if setup is not complete or this image's upgrade has not
+# reached the site, 1 (don't wait) otherwise.
 # Setup is complete if the file exists.
 swarm_wait() {
-    [[ ! -f "${OE_ROOT}/sites/docker-completed" ]]
+    # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
+    [[ ! -f "${OE_ROOT}/sites/docker-completed" ]] || upgrade_pending
 }
 
 # Checks if the current leader container has stopped responding (become stale).
@@ -228,18 +230,22 @@ is_leader_stale() {
 try_become_leader() {
     local leader_file="${OE_ROOT}/sites/docker-leader"
 
-    # If setup is already complete, nobody needs to be leader
-    if [[ -f "${OE_ROOT}/sites/docker-completed" ]]; then
+    # If setup is already complete, nobody needs to be leader, unless this
+    # image brings an upgrade: the election then picks the one that runs it (#196)
+    # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
+    if [[ -f "${OE_ROOT}/sites/docker-completed" ]] && ! upgrade_pending; then
         AUTHORITY=no
         echo "Setup already complete, this instance is a follower (AUTHORITY=no)"
         return 0
     fi
 
-    # Check if current leader is stale
+    # Check if current leader is stale. No leader file is not a takeover: its
+    # rm could delete the file of a replica that has just won the election.
     # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
-    if is_leader_stale; then
+    if [[ -f "${leader_file}" ]] && is_leader_stale; then
         echo "Current leader appears stale, attempting to take over..."
-        rm -f "${leader_file}" "${OE_ROOT}/sites/docker-initiated"
+        # BusyBox rm -f can fail when another replica removes the file first
+        rm -f "${leader_file}" "${OE_ROOT}/sites/docker-initiated" 2>/dev/null || true
         sleep 1  # Small delay to ensure file deletion is visible
     fi
 
@@ -269,6 +275,33 @@ update_leader_heartbeat() {
     fi
 }
 
+# Background heartbeat for a leader's long work. An fsupgrade step can outlast
+# LEADER_TIMEOUT (default 300s); a follower taking over then would run the same
+# upgrade a second time. The loop ends with this script, so a crashed leader
+# still goes stale.
+start_leader_heartbeat() {
+    if [[ "${AUTHORITY}" != "yes" ]] || [[ "${SWARM_MODE}" != "yes" ]]; then
+        return 0
+    fi
+    (
+        while kill -0 "$$" 2>/dev/null; do
+            update_leader_heartbeat
+            sleep "${LEADER_HEARTBEAT_INTERVAL:-30}"
+        done
+    ) >/dev/null 2>&1 &
+    LEADER_HEARTBEAT_PID=$!
+}
+
+# Stops the background heartbeat started by start_leader_heartbeat.
+stop_leader_heartbeat() {
+    if [[ -z "${LEADER_HEARTBEAT_PID:-}" ]]; then
+        return 0
+    fi
+    kill "${LEADER_HEARTBEAT_PID}" 2>/dev/null || true
+    wait "${LEADER_HEARTBEAT_PID}" 2>/dev/null || true
+    unset LEADER_HEARTBEAT_PID
+}
+
 # Handles swarm mode coordination: leader election and follower waiting.
 handle_swarm_mode() {
     # Skip coordination if swarm mode isn't enabled
@@ -279,9 +312,10 @@ handle_swarm_mode() {
     # Try to become the leader
     try_become_leader
 
-    # If we're a follower, wait for the leader to finish setup
-    if [[ "${AUTHORITY}" = "no" && ! -f "${OE_ROOT}/sites/docker-completed" ]]; then
-        echo "Waiting for docker-leader to finish configuration (with timeout-based recovery)..."
+    # If we're a follower, wait for the leader to finish setup or the upgrade
+    # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
+    if [[ "${AUTHORITY}" = "no" ]] && swarm_wait; then
+        echo "Waiting for docker-leader to finish configuration or upgrade (with timeout-based recovery)..."
         local -i max_wait_time="${LEADER_WAIT_TIMEOUT:-600}"  # Default: 10 minutes
         local -i waited=0
 
@@ -292,8 +326,8 @@ handle_swarm_mode() {
             # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
             if is_leader_stale; then
                 echo "Leader appears to have crashed, attempting to take over..."
-                # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
-                if try_become_leader; then
+                try_become_leader
+                if [[ "${AUTHORITY}" = "yes" ]]; then
                     echo "Successfully became leader after previous leader failure"
                     break
                 fi
@@ -306,8 +340,9 @@ handle_swarm_mode() {
         # Skip when we already hold AUTHORITY: try_become_leader's noclobber write
         # fails against our own file and would demote us.
         # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
-        if [[ "${AUTHORITY}" != "yes" ]] && [[ ! -f "${OE_ROOT}/sites/docker-completed" ]] && try_become_leader; then
-            echo "Promoted to leader after waiting period"
+        if [[ "${AUTHORITY}" != "yes" ]] && swarm_wait; then
+            try_become_leader
+            [[ "${AUTHORITY}" = "yes" ]] && echo "Promoted to leader after waiting period"
         fi
 
         # If we timed out, check if configuration actually exists
@@ -319,6 +354,14 @@ handle_swarm_mode() {
                 touch "${OE_ROOT}/sites/docker-completed" 2>/dev/null || true
                 echo "Configuration detected, marking swarm as completed"
             fi
+        fi
+
+        # This image's code must not start on the old schema. The exit leaves
+        # the retry to the next boot, which waits or takes over again (#196).
+        # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
+        if [[ "${AUTHORITY}" != "yes" ]] && upgrade_pending; then
+            echo "Error: the upgrade to this image did not finish within ${max_wait_time}s" >&2
+            exit 1
         fi
     fi
 
@@ -484,6 +527,34 @@ configure_redis_sessions() {
 # UPGRADE DETECTION AND EXECUTION
 # ============================================================================
 
+# Returns 0 when this image's code is newer than the site data. A site with no
+# sites marker has no version to upgrade from; check_upgrade records one for it.
+upgrade_pending() {
+    [[ -f "${OE_ROOT}/sites/default/docker-version" ]] || return 1
+
+    # Use integer types to guarantee numeric values defaulting to 0
+    local -i docker_version_root=0
+    local -i docker_version_code=0
+    local -i docker_version_sites=0
+
+    [[ -f /root/docker-version ]] && docker_version_root=$(cat /root/docker-version 2>/dev/null || echo 0)
+    [[ -f "${OE_ROOT}/docker-version" ]] && docker_version_code=$(cat "${OE_ROOT}/docker-version" 2>/dev/null || echo 0)
+    docker_version_sites=$(cat "${OE_ROOT}/sites/default/docker-version" 2>/dev/null || echo 0)
+
+    # Each marker is written by a different party:
+    #   /root/docker-version                     the image (Dockerfile)
+    #   ${OE_ROOT}/docker-version                the code in the webroot (Dockerfile;
+    #                                            stays old if the whole webroot is
+    #                                            kept on an old volume)
+    #   ${OE_ROOT}/sites/default/docker-version  the site data (first install and
+    #                                            run_upgrade; on the sites/ volume)
+    # Upgrade when the code is this image's code and the site data is older. A
+    # new image on an old sites/ volume is the image-swap case (#153); an old
+    # code marker means old code, which the new fsupgrade scripts must not touch.
+    [[ "${docker_version_root}" = "${docker_version_code}" ]] &&
+       [[ "${docker_version_root}" -gt "${docker_version_sites}" ]]
+}
+
 # Checks if OpenEMR needs to be upgraded to a newer version.
 # Compares version numbers from different locations to determine if upgrade is needed.
 check_upgrade() {
@@ -526,18 +597,8 @@ check_upgrade() {
         return 0
     fi
 
-    # Each marker is written by a different party:
-    #   /root/docker-version                     the image (Dockerfile)
-    #   ${OE_ROOT}/docker-version                the code in the webroot (Dockerfile;
-    #                                            stays old if the whole webroot is
-    #                                            kept on an old volume)
-    #   ${OE_ROOT}/sites/default/docker-version  the site data (first install and
-    #                                            run_upgrade; on the sites/ volume)
-    # Upgrade when the code is this image's code and the site data is older. A
-    # new image on an old sites/ volume is the image-swap case (#153); an old
-    # code marker means old code, which the new fsupgrade scripts must not touch.
-    if [[ "${docker_version_root}" = "${docker_version_code}" ]] &&
-       [[ "${docker_version_root}" -gt "${docker_version_sites}" ]]; then
+    # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
+    if upgrade_pending; then
         echo "Upgrade detected: ${docker_version_sites} -> ${docker_version_root}"
         run_upgrade
         return 0
@@ -574,6 +635,8 @@ run_upgrade() {
     local docker_version_sites
     docker_version_sites=$(cat "${OE_ROOT}/sites/default/docker-version" 2>/dev/null || echo 0)
 
+    start_leader_heartbeat
+
     # Run filesystem upgrade scripts in sequence
     local c=${docker_version_sites}
     while [[ "${c}" -le "${docker_version_root}" ]]; do
@@ -588,6 +651,8 @@ run_upgrade() {
         fi
         c=$(( c + 1 ))
     done
+
+    stop_leader_heartbeat
 
     # Update version marker
     echo -n "${docker_version_root}" > "${OE_ROOT}/sites/default/docker-version"
