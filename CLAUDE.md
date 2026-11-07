@@ -1,3 +1,3 @@
 @AGENTS.md
 
-Read [`AGENTS.md`](AGENTS.md) for the agent rules that apply in this repository.
+For repository context, documentation links, and build/test/lint commands, follow **AGENTS.md**.
