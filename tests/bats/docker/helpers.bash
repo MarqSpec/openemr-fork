@@ -124,9 +124,10 @@ run_with_stubbed_path() {
 # Lays out, under BATS_TEST_TMPDIR, what an image's Dockerfile puts on disk for
 # openemr.sh's upgrade gate: /root/docker-version, a stub for each
 # fsupgrade-N.sh (it appends N to UPGRADE_RAN), and the webroot code marker only
-# if the Dockerfile copies one there (#153). Extracts the real check_upgrade and
-# run_upgrade into UPGRADE_LIB with /root/ pointed at the fake one.
-# Sets IMAGE_VERSION, FAKE_ROOT, FAKE_OE_ROOT, UPGRADE_RAN and UPGRADE_LIB.
+# if the Dockerfile copies one there (#153). Extracts the real upgrade functions
+# into UPGRADE_LIB with /root/ pointed at the fake one, and the swarm election
+# into SWARM_LIB.
+# Sets IMAGE_VERSION, FAKE_ROOT, FAKE_OE_ROOT, UPGRADE_RAN, UPGRADE_LIB and SWARM_LIB.
 # Usage: upgrade_gate_setup <variant>
 upgrade_gate_setup() {
     local script_dir script n
@@ -135,6 +136,7 @@ upgrade_gate_setup() {
     FAKE_OE_ROOT="${BATS_TEST_TMPDIR}/openemr"
     UPGRADE_RAN="${BATS_TEST_TMPDIR}/fsupgrades-run"
     UPGRADE_LIB="${BATS_TEST_TMPDIR}/upgrade-gate.bash"
+    SWARM_LIB="${BATS_TEST_TMPDIR}/swarm.bash"
     mkdir -p "$FAKE_ROOT" "${FAKE_OE_ROOT}/sites/default" || return 1
     : > "$UPGRADE_RAN"
     IMAGE_VERSION="$(tr -d '[:space:]' < "${script_dir}/upgrade/docker-version")"
@@ -149,9 +151,19 @@ upgrade_gate_setup() {
         cp "${FAKE_ROOT}/docker-version" "${FAKE_OE_ROOT}/docker-version"
     fi
     {
+        extract_bash_function "${script_dir}/openemr.sh" upgrade_pending
+        extract_bash_function "${script_dir}/openemr.sh" start_leader_heartbeat
+        extract_bash_function "${script_dir}/openemr.sh" stop_leader_heartbeat
         extract_bash_function "${script_dir}/openemr.sh" check_upgrade
         extract_bash_function "${script_dir}/openemr.sh" run_upgrade
     } | sed "s|/root/|${FAKE_ROOT}/|g" > "$UPGRADE_LIB"
+    {
+        extract_bash_function "${script_dir}/openemr.sh" swarm_wait
+        extract_bash_function "${script_dir}/openemr.sh" is_leader_stale
+        extract_bash_function "${script_dir}/openemr.sh" try_become_leader
+        extract_bash_function "${script_dir}/openemr.sh" update_leader_heartbeat
+        extract_bash_function "${script_dir}/openemr.sh" handle_swarm_mode
+    } > "$SWARM_LIB"
 }
 
 # Runs the upgrade gate the way openemr.sh's step 3 does: set -euo pipefail, as
@@ -163,6 +175,7 @@ run_upgrade_gate() {
     run bash -c '
         set -euo pipefail
         AUTHORITY=yes
+        SWARM_MODE=no
         OE_ROOT="$1"
         CONFIGURED="$2"
         is_configured() { echo "${CONFIGURED}"; }
@@ -172,4 +185,55 @@ run_upgrade_gate() {
         check_upgrade
         echo GATE_PASSED
     ' _ "$FAKE_OE_ROOT" "$1" "$UPGRADE_LIB"
+}
+
+# Writes SWARM_BOOT: one replica's openemr.sh steps 1, 3 and 12 under
+# SWARM_MODE=yes, on a configured site, with the wait loops' sleeps cut short. It
+# prints BOOTED, its role and any heartbeat left running. A replica holds at the first line
+# until SWARM_GO exists, so several can start together. Run it after
+# upgrade_gate_setup.
+# Usage: swarm_boot_setup
+swarm_boot_setup() {
+    SWARM_BOOT="${BATS_TEST_TMPDIR}/swarm-boot.bash"
+    SWARM_GO="${BATS_TEST_TMPDIR}/swarm-go"
+    REPLICA_LOGS="${BATS_TEST_TMPDIR}/replicas"
+    mkdir -p "$REPLICA_LOGS" || return 1
+    touch "$SWARM_GO"
+    cat > "$SWARM_BOOT" <<EOF
+set -euo pipefail
+until [[ -f "${SWARM_GO}" ]]; do sleep 0.01; done
+AUTHORITY=yes
+SWARM_MODE=yes
+OE_ROOT="${FAKE_OE_ROOT}"
+is_configured() { echo 1; }
+wait_for_mysql() { :; }
+rsync() { :; }
+sleep() { command sleep 0.05; }
+source "${UPGRADE_LIB}"
+source "${SWARM_LIB}"
+handle_swarm_mode
+check_upgrade
+if [[ "\${AUTHORITY}" = "yes" ]]; then
+    touch "\${OE_ROOT}/sites/docker-completed"
+    rm -f "\${OE_ROOT}/sites/docker-leader"
+fi
+echo "BOOTED AUTHORITY=\${AUTHORITY} HEARTBEAT=\${LEADER_HEARTBEAT_PID:-none}"
+EOF
+}
+
+# Starts <count> replicas of SWARM_BOOT together and waits for them. Logs go to
+# REPLICA_LOGS. Prints each replica's exit status, one to a line.
+# Usage: run_replicas <count>
+run_replicas() {
+    local i
+    local -a pids=()
+    rm -f "$SWARM_GO" "${REPLICA_LOGS}"/*
+    for (( i = 1; i <= $1; i++ )); do
+        bash "$SWARM_BOOT" > "${REPLICA_LOGS}/${i}.log" 2>&1 &
+        pids+=("$!")
+    done
+    touch "$SWARM_GO"
+    for i in "${pids[@]}"; do
+        wait "$i" && echo 0 || echo "$?"
+    done
 }

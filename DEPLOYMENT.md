@@ -230,8 +230,8 @@ globals back this and need no setting: `agentforge_ingest_watermark` and `agentf
 (`<document id>:<counted runs>:<highest id accepted>`, empty when nothing is held back).
 
 **The synthetic seed** runs at boot, only where declared, and never fails the boot. With `SWARM_MODE=yes` it runs
-only until setup has completed on the `sites` volume: every later boot is a follower and skips it, so a kept volume
-is reseeded by hand.
+at first-time setup on the `sites` volume and on the boot that upgrades it: every other boot is a follower and skips
+it, so a kept volume is reseeded by hand.
 
 | Variable | Effect |
 |---|---|
@@ -328,21 +328,25 @@ volume and the database. A new `fsupgrade-<n>.sh` must also be named in the `COP
 `docker/railway/Dockerfile` and `docker/release/Dockerfile`: if it is missing from the image, the container exits at
 `Start: Processing fsupgrade-<n>.sh` and the volume stays on the old version.
 
-**With `SWARM_MODE=yes` (§2) no boot runs them once setup has completed on the `sites` volume.** Every later boot is a
-follower and skips the check, so the new code starts on the old schema. For a release that raises the version, do this
-in step 3:
+**The boot runs them, with `SWARM_MODE=yes` (§2) too.** Replicas of the new image contend for one lock on the `sites`
+volume, so one runs the upgrade and the rest wait for the volume to reach the new version. In step 3, confirm that one
+container's log shows `Upgrade detected: <old> -> <new>` and `OpenEMR upgrade completed successfully`. Then:
 
-1. Run one OpenEMR replica with `SWARM_MODE=no`.
-2. Deploy the new image and confirm the container log shows `Upgrade detected: <old> -> <new>` and
-   `OpenEMR upgrade completed successfully`.
-3. Set `SWARM_MODE=yes` again and restart.
+- A waiting replica that does not see the upgrade finish within `LEADER_WAIT_TIMEOUT` (default 600 seconds) exits with
+  `the upgrade to this image did not finish`, rather than start the new code on the old schema. It needs a restart
+  policy to wait again.
+- If an upgrade fails, the container exits and the volume stays on the old version. Once the lock has gone
+  `LEADER_TIMEOUT` (default 300 seconds) without a heartbeat, a waiting or restarted replica takes over and runs every
+  script above that version again.
+- Nothing stops replicas of the old image while this runs. If they cannot run on the new schema, scale OpenEMR to one
+  replica for the deploy.
 
 `RUN_DB_UPGRADE` plays no part in this. A release that raises `$v_database` in `version.php` and leaves `docker-version`
 alone changes only the schema: deploy it with `RUN_DB_UPGRADE=yes`, open `/sql_upgrade.php`, leave the prior release it
 selects (it offers no entry for the running release, so `8.1.1` on 8.2.0), run it, then unset the variable and
 redeploy, and confirm `/sql_upgrade.php` returns 404. A restart is not enough: setup scripts are removed only on the
-first boot of a new container, so the same filesystem keeps them. `sql_upgrade.php` does not replace the steps above,
-because it neither runs the `fsupgrade` scripts' file changes nor updates the volume's `docker-version`.
+first boot of a new container, so the same filesystem keeps them. `sql_upgrade.php` does not replace a `docker-version`
+upgrade, because it neither runs the `fsupgrade` scripts' file changes nor updates the volume's `docker-version`.
 
 ### The release scripts' variables
 
@@ -390,8 +394,8 @@ version: the adapter deploys the moving tag, so without this it redeploys the cu
 version.
 
 - **Frontend:** stateless apart from sessions; rolling back is always safe. Users sign in again.
-- **OpenEMR:** the image is safe to roll back as long as the database was not upgraded. With `SWARM_MODE=yes`
-  a boot upgrades nothing once setup has completed, so the database changes only through *Upgrading OpenEMR* (§8).
+- **OpenEMR:** the image is safe to roll back as long as the database was not upgraded. A boot changes it only for a
+  release that raises `docker-version`, and `/sql_upgrade.php` only when you run it (*Upgrading OpenEMR*, §8).
   After an upgrade an older image may not run against the schema: restore the database and `sites` volume from the backup taken in §8 step 1, then deploy the previous tag.
 - **The OAuth client** does not change with a deployment; roll it back only if the frontend's origin changed (§4).
 
