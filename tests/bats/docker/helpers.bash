@@ -91,6 +91,17 @@ assert_pattern_count_ge() {
     return 0
 }
 
+# Extract a top-level bash function (opening `name()` and a `}` at column 0).
+extract_bash_function() {
+    local file="$1"
+    local name="$2"
+    awk -v fn="$name" '
+        $0 ~ "^" fn "\\(\\)" {p=1}
+        p {print}
+        p && $0 == "}" {exit}
+    ' "$file"
+}
+
 # Create an executable command stub in a directory.
 # Usage: create_stub_command <stub_dir> <command_name> <script_body>
 create_stub_command() {
@@ -108,4 +119,57 @@ run_with_stubbed_path() {
     local stub_dir="$1"
     shift
     run env PATH="${stub_dir}:$PATH" "$@"
+}
+
+# Lays out, under BATS_TEST_TMPDIR, what an image's Dockerfile puts on disk for
+# openemr.sh's upgrade gate: /root/docker-version, a stub for each
+# fsupgrade-N.sh (it appends N to UPGRADE_RAN), and the webroot code marker only
+# if the Dockerfile copies one there (#153). Extracts the real check_upgrade and
+# run_upgrade into UPGRADE_LIB with /root/ pointed at the fake one.
+# Sets IMAGE_VERSION, FAKE_ROOT, FAKE_OE_ROOT, UPGRADE_RAN and UPGRADE_LIB.
+# Usage: upgrade_gate_setup <variant>
+upgrade_gate_setup() {
+    local script_dir script n
+    script_dir="$(get_script_dir "$1")" || return 1
+    FAKE_ROOT="${BATS_TEST_TMPDIR}/root"
+    FAKE_OE_ROOT="${BATS_TEST_TMPDIR}/openemr"
+    UPGRADE_RAN="${BATS_TEST_TMPDIR}/fsupgrades-run"
+    UPGRADE_LIB="${BATS_TEST_TMPDIR}/upgrade-gate.bash"
+    mkdir -p "$FAKE_ROOT" "${FAKE_OE_ROOT}/sites/default" || return 1
+    : > "$UPGRADE_RAN"
+    IMAGE_VERSION="$(tr -d '[:space:]' < "${script_dir}/upgrade/docker-version")"
+    printf '%s' "$IMAGE_VERSION" > "${FAKE_ROOT}/docker-version"
+    for script in "${script_dir}"/upgrade/fsupgrade-*.sh; do
+        n="${script##*/fsupgrade-}"
+        n="${n%.sh}"
+        printf 'echo %s >> "%s"\n' "$n" "$UPGRADE_RAN" > "${FAKE_ROOT}/fsupgrade-${n}.sh"
+    done
+    if tr -d '\r' < "${script_dir}/Dockerfile" |
+        grep -qE '^COPY upgrade/docker-version /var/www/localhost/htdocs/openemr/docker-version$'; then
+        cp "${FAKE_ROOT}/docker-version" "${FAKE_OE_ROOT}/docker-version"
+    fi
+    {
+        extract_bash_function "${script_dir}/openemr.sh" check_upgrade
+        extract_bash_function "${script_dir}/openemr.sh" run_upgrade
+    } | sed "s|/root/|${FAKE_ROOT}/|g" > "$UPGRADE_LIB"
+}
+
+# Runs the upgrade gate the way openemr.sh's step 3 does: set -euo pipefail, as
+# the leader, with is_configured answering <configured> (1 or 0). Prints
+# GATE_PASSED when check_upgrade returns without killing the script.
+# Usage: run_upgrade_gate <configured>
+run_upgrade_gate() {
+    # shellcheck disable=SC2016  # expanded by the inner bash, not here
+    run bash -c '
+        set -euo pipefail
+        AUTHORITY=yes
+        OE_ROOT="$1"
+        CONFIGURED="$2"
+        is_configured() { echo "${CONFIGURED}"; }
+        wait_for_mysql() { :; }
+        update_leader_heartbeat() { :; }
+        source "$3"
+        check_upgrade
+        echo GATE_PASSED
+    ' _ "$FAKE_OE_ROOT" "$1" "$UPGRADE_LIB"
 }

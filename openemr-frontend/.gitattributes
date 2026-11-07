@@ -1,2 +1,5 @@
-# Google TS style / gts expects LF; keep Windows checkouts from converting source to CRLF.
+# Google TS style / gts expects LF; keep Windows checkouts from converting source to CRLF. The workflows,
+# the shell gates and the generated documents are all LF too.
 * text=auto eol=lf
+*.png binary
+*.ico binary

@@ -64,7 +64,9 @@ function consumeLogoutReasonCookie(): string | undefined {
     .split('; ')
     .find(part => part.startsWith(prefix));
   if (entry === undefined) return undefined;
-  document.cookie = `${LOGOUT_REASON_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax`;
+  // Match the token handler's set: Secure only on HTTPS (host-prefixed cookie mode).
+  const secure = location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `${LOGOUT_REASON_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax${secure}`;
   return entry.slice(prefix.length);
 }
 

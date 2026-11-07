@@ -169,6 +169,13 @@ describe('given the built SPA and the /bff/* routes on one origin', () => {
     );
   });
 
+  it('when the SPA runtime config is requested, then it is never stored — not revalidated like a build file, never immutable — so a changed service variable is seen on the next load', async () => {
+    const response = await app.inject({method: 'GET', url: '/bff/config'});
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe(NO_STORE);
+  });
+
   it.each(['/signed-out', '/patients/1', '/signed-out?reason=idle'])(
     'when a client-side route such as %s is loaded directly, then the SPA shell answers it and is never stored',
     async url => {
@@ -453,6 +460,7 @@ describe('given any response the token handler sends (NFR-SEC-2, FR-BFF-6)', () 
     ['a client-side route', '/signed-out'],
     ['a missing file', '/missing.png'],
     ['the liveness probe', '/bff/health'],
+    ['the SPA runtime config (API-48)', '/bff/config'],
     ['an unknown /bff/* path', '/bff/unknown'],
   ])(
     'when it is %s, then it carries CSP, HSTS, Referrer-Policy and nosniff',
@@ -721,6 +729,7 @@ describe('given what the logs may carry of a query string (NFR-SEC-6, FR-BFF-5)'
     ['a missing file', '/missing.png'],
     ['the liveness probe', '/bff/health'],
     ['the readiness probe', '/bff/ready'],
+    ['the SPA runtime config', '/bff/config'],
     ['an unknown /bff/* path', '/bff/unknown'],
     ['a FHIR search with no session', '/bff/fhir/AllergyIntolerance'],
     ['a FHIR search off the allow-list', '/bff/fhir/Patient'],

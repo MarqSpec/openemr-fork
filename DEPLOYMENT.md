@@ -33,8 +33,8 @@ environment variables:
 | `OE_USER`, `OE_PASS` | The initial OpenEMR administrator, created at first setup — choose a strong password |
 | `SWARM_MODE=yes` | Enables the container's leader election and the restore of shared site files; this image expects it on |
 | `PORT=80` | Set where the platform routes and health-checks by `PORT`, so its checks reach Apache on port 80 |
-| `RUN_DB_UPGRADE=yes` | Only for a deployment that must run a database upgrade: keeps `sql_upgrade.php` and the other one-time scripts reachable. Unset afterwards — they are unauthenticated by design |
-| `TZ` | The server's time zone — the clinic's ([BUG-35](REQUIREMENTS.md#bug-35), [BUG-51](REQUIREMENTS.md#bug-51)) |
+| `RUN_DB_UPGRADE=yes` | Keeps `sql_patch.php`, `sql_upgrade.php`, `ippf_upgrade.php` and `acl_upgrade.php` reachable for a manual upgrade; it runs no upgrade itself (§8). Unset afterwards and redeploy, because they stay until a new container replaces the old one — they are unauthenticated by design |
+| `TZ` | The time zone the synthetic seed (§5) runs in, `UTC` by default. OpenEMR's own is **Time Zone** under *Administration › Config › Locale*: set that to the clinic's ([BUG-35](REQUIREMENTS.md#bug-35), [BUG-51](REQUIREMENTS.md#bug-51)) |
 | `AGENTFORGE_*` | The module's settings and the synthetic seed (§5) |
 
 Upstream's other options (Redis, certificates, Xdebug, `OPENEMR__ENVIRONMENT`, …) are described in
@@ -46,7 +46,8 @@ Health check: `GET /interface/login/login.php?site=default` answers 200 (`railwa
 ## 3. Building and tagging the images
 
 Tag every image with the version being released and the commit it was built from, and keep the previous tags: a
-rollback (§9) is a redeploy of the previous tag.
+rollback (§9) redeploys one of them. The `deploy.sh` adapters (§8) also need a moving `:<environment>` tag on each
+image.
 
 ```shell
 VERSION=1.0.0                                   # the release
@@ -57,8 +58,8 @@ docker build -f docker/railway/Dockerfile -t registry.example.test/openemr-fork:
   -t registry.example.test/openemr-fork:sha-"$SHA" .
 
 # The frontend, from the repository root; BUILD_SHA is what /bff/health reports
+# Nothing per-environment goes into the image: PATIENT_APPS and PRIVACY_GRACE_SECONDS are set where it runs (§6)
 docker build --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
-  --build-arg VITE_PATIENT_APPS='[{"label":"Launch AgentForge","url":"https://openemr.example.test/interface/modules/custom_modules/oe-module-agentforge/public/agenda-drilldown-launch.php?patient={patientId}"}]' \
   -t registry.example.test/openemr-frontend:"$VERSION" -t registry.example.test/openemr-frontend:sha-"$SHA" \
   openemr-frontend
 
@@ -168,18 +169,19 @@ secret, or the client not enabled), `scope_unsupported` (with the missing scopes
 
 ## 5. The AgentForge module
 
-The module is registered and enabled automatically when the container boots. Configure it in OpenEMR under
-**Administration › Modules › Manage Modules › Custom Modules › AgentForge Launch Integration › gear icon**; values are
+The module is registered and enabled automatically when the container first sets up the database; on an existing
+database, enable it yourself in Manage Modules. Configure it in OpenEMR under
+**Administration › Modules › Manage Modules › Custom Modules › Agent Forge Copilot › gear icon**; values are
 stored in the `globals` table and take effect at once. A field left blank falls back to its environment variable,
 and otherwise to not configured.
 
 | Setting | Variable | Purpose |
 |---|---|---|
 | Launch URI | `AGENTFORGE_LAUNCH_URI` | The copilot's per-patient launch endpoint (the chart button) |
-| Agenda Launch URI | `AGENTFORGE_AGENDA_LAUNCH_URI` | The copilot's roster endpoint (the Day's Agenda tab); blank reuses the Launch URI |
+| Agenda Launch URI | `AGENTFORGE_AGENDA_LAUNCH_URI` | The copilot's roster endpoint (the Daily Agenda tab); blank reuses the Launch URI |
 | Issuer | `AGENTFORGE_ISSUER` | The FHIR issuer the launch is validated against |
 | Launch mode | — | A modal frame or a new browser tab |
-| Show the Day's Agenda menu | — | Hide or show the menu item |
+| Daily Agenda tab | — | Hide or show the tab |
 | Ingest URI | `AGENTFORGE_INGEST_URI` | Where the document-ingest service forwards new documents; blank disables ingest |
 | Category map | `AGENTFORGE_INGEST_CATEGORY_MAP` | Which document categories are forwarded, and as which document type |
 
@@ -200,8 +202,36 @@ OpenEMR's own host — a launch whose `/launch` and OAuth callback land on diffe
 
 **Document ingest** runs as an OpenEMR background service, which the module registers on load (an administrator's
 on/off choice is kept); the container forwards the two ingest variables to it (`docker/release/openemr.conf`).
+Nothing in the image schedules it: OpenEMR runs background services while a signed-in user has its main screen
+open, and tablets on the frontend do not count, so with nobody there it does not run and logs nothing. To run it
+regardless, schedule it yourself as the `apache` user, because `bin/console` refuses root: in the webroot,
+`su-exec apache php bin/console background:services crontab` prints the entries. The scheduled
+job needs the ingest settings too, so set them in the module's form or pass the variables to the job. If
+uploaded documents are never forwarded, first confirm it runs, then read the container log for an `AgentForge document ingest skipped` warning,
+quoted inside a `Background service subprocess wrote to stderr` line (§10). It names the missing or broken setting,
+and tells an unset category map apart from one that is set but unparsable or maps nothing to `lab_pdf` /
+`intake_form`. It is logged once per reason, not every run. `AgentForge document ingest
+forward failed` names the document id and the HTTP status or exception class; `AgentForge document ingest could not
+read a document` names the id and the exception class only (the exception message can quote the file path, so it is
+never logged). The document is retried on every later run, because the watermark stops just below it. Every later
+document is sent again on each run while it is held: the copilot answers from its hash index, but it is not free (a
+quiet clinic re-sends a few files on each run, a busy one many), so fix or re-upload a stuck document promptly.
+After 30 counted runs (at least an hour at the two-minute interval) the run gives up and the watermark moves past the
+document. Whether a run counts depends on why the document failed. A copilot rejection counts only if the copilot newly
+accepted another document in that run; an unreadable file counts only if another file was read in that run; so neither
+a copilot outage nor a storage outage (unmounted volume, CouchDB) uses up a document's runs. (A missing encryption key
+fails only encrypted documents, so unencrypted files read in the same run make it count.)
+A patient with no FHIR UUID, an empty file and a document with no UUID of its own count every run. The error line names
+the document id and the cause, and each cause has its own remedy, after which the document must be re-uploaded:
+`... gave up on a document the sidecar kept rejecting` (check the copilot), `... whose patient has no FHIR UUID` (give
+the patient a UUID), `... whose file could not be read` (check the document storage and its encryption key), `... whose
+file is empty` (upload it again with its content), `... that has no UUID of its own` (re-upload it so it gets one). Two
+globals back this and need no setting: `agentforge_ingest_watermark` and `agentforge_ingest_retry`
+(`<document id>:<counted runs>:<highest id accepted>`, empty when nothing is held back).
 
-**The synthetic seed** runs on every boot, only where declared, and never fails the boot:
+**The synthetic seed** runs at boot, only where declared, and never fails the boot. With `SWARM_MODE=yes` it runs
+only until setup has completed on the `sites` volume: every later boot is a follower and skips it, so a kept volume
+is reseeded by hand.
 
 | Variable | Effect |
 |---|---|
@@ -233,13 +263,16 @@ rule is in [`openemr-frontend/bff/.env.example`](openemr-frontend/bff/.env.examp
 | `BFF_OAUTH_TIMEOUT_MS`, `BFF_READY_TIMEOUT_MS`, `BFF_LOG_LEVEL` | no | Upstream budgets and log level |
 | `BFF_DEV_INSECURE_COOKIES` | local only | Plain-http cookies for local development; refused in production |
 
-**Build arguments** (public, per environment, baked into the SPA at build time):
+**The SPA's settings** (public, per environment, read by the token handler at start-up and served to the SPA at
+`GET /bff/config`, so the same image runs in every environment; a bad value is ignored with a warning in the log
+naming the variable and the rule, never stopping start-up):
 
-| Argument | Purpose |
-|---|---|
-| `VITE_PATIENT_APPS` | The Patient apps slot ([FR-APP-1](REQUIREMENTS.md#fr-app-1)): a JSON list of `{label, url, aclHint?}`; empty means no slot |
-| `VITE_PRIVACY_GRACE_SECONDS` | Seconds the app may be hidden before it signs out (0–900, default 60, [FR-UI-4](REQUIREMENTS.md#fr-ui-4)) |
-| `BUILD_SHA` | The commit `/bff/health` reports |
+| Variable | Required | Purpose |
+|---|---|---|
+| `PATIENT_APPS` | no | The Patient apps slot ([FR-APP-1](REQUIREMENTS.md#fr-app-1)): a JSON list of `{label, url, aclHint?}` naming this environment's OpenEMR; unset, blank or invalid means no slot |
+| `PRIVACY_GRACE_SECONDS` | no | Seconds the app may be hidden before it signs out (0–900, default 60, [FR-UI-4](REQUIREMENTS.md#fr-ui-4)) |
+
+**Build argument:** `BUILD_SHA`, the commit `/bff/health` reports — the only one to pass.
 
 **Cache headers.** The token handler sets `Cache-Control` on everything it serves: `index.html` is `no-store`,
 fingerprinted `/assets/*` are immutable for a year, other files `no-cache, max-age=0`, and every `/bff/*` response
@@ -266,12 +299,17 @@ Confirm each, and record who confirmed it and when, before the first real patien
 
 ## 8. Deploying
 
-1. Back up the OpenEMR database and the `sites` volume.
+1. Back up the OpenEMR database and the `sites` volume. If the release upgrades OpenEMR, read *Upgrading OpenEMR*
+   below first.
 2. Build, tag and push both images (§3).
 3. Point each service at the new tag and restart it, OpenEMR first. On any container platform this is the
    platform's own command — for example `kubectl set image …`, `docker compose up -d` with the new tag, or the
-   hosting provider's deploy command. `openemr-frontend/scripts/deploy.sh <environment> <version>` is a placeholder
-   for that command: put the platform's command in it if you want one entry point.
+   hosting provider's deploy command. `openemr-frontend/scripts/deploy.sh <environment> <version>` is one entry
+   point for it. Unset, `DEPLOY_PROVIDER` leaves it a placeholder that deploys nothing and warns; set to `railway`,
+   `azure` or `kubectl`, it selects an adapter (*The release scripts' variables*). The script builds and tags
+   nothing. The adapters deploy the moving `:<environment>` tag and treat `<version>` only as a label, so a
+   **promotion step** in your release process must first point that tag at the release, keeping the tag it
+   replaces as `:<environment>-previous`.
 4. Smoke-check:
    - OpenEMR: `GET /interface/login/login.php?site=default` answers 200.
    - Frontend: `GET /bff/health` answers `{"status":"ok","build":"<the commit you deployed>"}`, and `GET /bff/ready`
@@ -282,25 +320,79 @@ Confirm each, and record who confirmed it and when, before the first real patien
 
 A frontend redeploy signs every user out (sessions are in memory); deploy outside clinic hours.
 
+### Upgrading OpenEMR
+
+A release upgrades OpenEMR when it raises `docker/release/upgrade/docker-version` and the repository root's
+`docker-version`, which must stay equal: the `fsupgrade-<n>.sh` scripts for the new versions migrate the `sites`
+volume and the database. A new `fsupgrade-<n>.sh` must also be named in the `COPY` and `chmod` lists of
+`docker/railway/Dockerfile` and `docker/release/Dockerfile`: if it is missing from the image, the container exits at
+`Start: Processing fsupgrade-<n>.sh` and the volume stays on the old version.
+
+**With `SWARM_MODE=yes` (§2) no boot runs them once setup has completed on the `sites` volume.** Every later boot is a
+follower and skips the check, so the new code starts on the old schema. For a release that raises the version, do this
+in step 3:
+
+1. Run one OpenEMR replica with `SWARM_MODE=no`.
+2. Deploy the new image and confirm the container log shows `Upgrade detected: <old> -> <new>` and
+   `OpenEMR upgrade completed successfully`.
+3. Set `SWARM_MODE=yes` again and restart.
+
+`RUN_DB_UPGRADE` plays no part in this. A release that raises `$v_database` in `version.php` and leaves `docker-version`
+alone changes only the schema: deploy it with `RUN_DB_UPGRADE=yes`, open `/sql_upgrade.php`, leave the prior release it
+selects (it offers no entry for the running release, so `8.1.1` on 8.2.0), run it, then unset the variable and
+redeploy, and confirm `/sql_upgrade.php` returns 404. A restart is not enough: setup scripts are removed only on the
+first boot of a new container, so the same filesystem keeps them. `sql_upgrade.php` does not replace the steps above,
+because it neither runs the `fsupgrade` scripts' file changes nor updates the volume's `docker-version`.
+
+### The release scripts' variables
+
+`openemr-frontend/scripts/deploy.sh` and `smoke-check.sh` read these. Set them where your release job runs; none is
+needed to run the platform's own command by hand.
+
+| Name | Read by | Purpose |
+|---|---|---|
+| `STAGING_URL` / `PRODUCTION_URL` | `smoke-check.sh` | The smoke check's base URL. Unset, the check passes with a warning that the release is unverified, until `DEPLOY_PROVIDER` selects an adapter; then it fails the release |
+| `HEALTH_PATH` | `smoke-check.sh` | The path appended to that URL, `/` when unset. It must answer 2xx |
+| `DEPLOY_PROVIDER` | `deploy.sh`, `smoke-check.sh` | `railway`, `azure` or `kubectl`. Unset or `placeholder`, `deploy.sh` deploys nothing and warns |
+| `IMAGES` | `deploy.sh` (Railway) | The images to deploy, space-separated, in that order. With one image, leave it unset and set `GITHUB_REPOSITORY` |
+| `GITHUB_REPOSITORY` | `deploy.sh` | `<owner>/<repo>`, which the Azure adapter, and the Railway adapter without `IMAGES`, turn into `ghcr.io/<owner>/<repo>`. GitHub Actions sets it |
+| `RAILWAY_TOKEN` | `deploy.sh` | A Railway project token scoped to one environment. Keep it a secret; the script sends it in a header and never prints it |
+| `RAILWAY_ENVIRONMENT_ID` | `deploy.sh` | Optional: the Railway environment the token must be scoped to. Unset, that environment must be named `staging` or `production`, after the script's first argument |
+| `DEPLOY_POLL_SECONDS` / `DEPLOY_POLL_ATTEMPTS` | `deploy.sh` | How long the Railway adapter waits for each deployment, `10` and `60` when unset |
+| `AZURE_CONTAINER_APP` | `deploy.sh` | The Azure Container App's base name; the script appends `-<environment>` |
+| `KUBE_DEPLOYMENT` | `deploy.sh` | The Kubernetes deployment. Its namespace is the environment |
+
+The Railway adapter needs `curl`, `jq` and `docker buildx` on the machine that runs it, and the others `az` or
+`kubectl`.
+
 ### The frontend on Railway
 
-The repository is ready for Railway as one option. OpenEMR: `railway.json` builds `docker/railway/Dockerfile` and
+The repository is ready for Railway as one option, built on Railway or run from your images. To build on Railway,
+leave `DEPLOY_PROVIDER` unset: the `railway` adapter refuses a service that builds from a repository or runs no
+image. OpenEMR: `railway.json` builds `docker/railway/Dockerfile` and
 health-checks the login page; attach a volume at `/var/www/localhost/htdocs/openemr/sites`, set the §2 variables
 (with `PORT=80`), and reference the database service's variables (`${{MySQL.MYSQLHOST}}` and so on). The frontend is
 its own service, built from `openemr-frontend/Dockerfile`: `railway up openemr-frontend --path-as-root --service
 <service> --environment <environment>`, with the §6 variables set on that service (the client secret as a secret
-variable) and the `VITE_*` build arguments as service variables of the same name. Write the commit into
+variable) and `PATIENT_APPS` / `PRIVACY_GRACE_SECONDS` among them. Write the commit into
 `openemr-frontend/BUILD_SHA` before uploading so `/bff/health` reports it. Railway's edge must pass the token
 handler's cache headers through (§6), and the service must run one replica.
 
+To run your images instead, set `DEPLOY_PROVIDER=railway` and give each service the image `<image>:<environment>`
+as its source. The adapter deploys each image in turn, waits for it, and checks that the service runs the digest
+the registry holds for that tag.
+
 ## 9. Rolling back
 
-Redeploy the previous version's tags — the same step 3 with the earlier tag — and smoke-check again.
+Redeploy the previous version's tags — the same step 3 with the earlier tag — and smoke-check again. With a
+`deploy.sh` adapter, first point `:<environment>` back at `:<environment>-previous`, then run `deploy.sh` with that
+version: the adapter deploys the moving tag, so without this it redeploys the current image and reports the old
+version.
 
 - **Frontend:** stateless apart from sessions; rolling back is always safe. Users sign in again.
-- **OpenEMR:** the image is safe to roll back as long as the database was not upgraded. If a release ran a database
-  upgrade (`RUN_DB_UPGRADE=yes`), an older image may not run against the upgraded schema: restore the database and
-  `sites` volume from the backup taken in §8 step 1, then deploy the previous tag.
+- **OpenEMR:** the image is safe to roll back as long as the database was not upgraded. With `SWARM_MODE=yes`
+  a boot upgrades nothing once setup has completed, so the database changes only through *Upgrading OpenEMR* (§8).
+  After an upgrade an older image may not run against the schema: restore the database and `sites` volume from the backup taken in §8 step 1, then deploy the previous tag.
 - **The OAuth client** does not change with a deployment; roll it back only if the frontend's origin changed (§4).
 
 ## 10. Monitoring
@@ -311,6 +403,7 @@ Redeploy the previous version's tags — the same step 3 with the earlier tag �
 - **Logs:** the token handler writes JSON lines to stdout — method, route shape, `API-` id, status and latency, never
   a body, query string or token. Watch for `session ended: refresh failed`, `signin_failed` and
   `signin_unavailable`, and for 401, 403 and `empty_bundle` counts on the FHIR proxy ([BUG-38](REQUIREMENTS.md#bug-38)).
-  OpenEMR's logs are Apache's and PHP's, on the container's stdout.
+  OpenEMR's logs are Apache's and PHP's, on the container's stdout and stderr. A background service's own log lines appear there
+  inside a `Background service subprocess wrote to stderr` warning, sanitised and truncated to 2,000 characters.
 - **Audit:** every clinical read is an OpenEMR API call under the user's identity, in OpenEMR's audit log
   (*Administration › Logs*).

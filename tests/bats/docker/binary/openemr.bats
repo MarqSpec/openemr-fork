@@ -45,3 +45,8 @@ setup() {
 @test "binary openemr.sh: /usr/local/bin/php-fpm or php-fpm" {
     assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'php-fpm'
 }
+
+@test "binary openemr.sh: skips post-wait try_become_leader when already leader" {
+    grep -A6 'Try one more time to become leader' "${SCRIPT_DIR}/openemr.sh" \
+        | grep -q 'AUTHORITY}" != "yes"'
+}

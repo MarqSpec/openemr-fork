@@ -145,7 +145,7 @@ tag and digest.
 
 ## Versioning and commits
 
-The frontend's version is `package.json`'s, shown in the app with the short commit. Commit messages follow
+The frontend's version is `package.json`'s, shown in the app with the short commit when the build names one. Commit messages follow
 [Conventional Commits](https://www.conventionalcommits.org/). A change to behaviour, a server call or configuration
 updates [REQUIREMENTS.md](REQUIREMENTS.md), [INTERFACES.md](INTERFACES.md) or [DEPLOYMENT.md](DEPLOYMENT.md) in the
 same change ([NFR-DOC-2](REQUIREMENTS.md#nfr-doc-2)).

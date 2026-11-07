@@ -87,6 +87,17 @@ class SymfonyBackgroundServiceSpawnerPhpChildTest extends TestCase
         };
 
         switch ($name) {
+            case 'logs_then_ok':
+                // A service that logs through error_log() and then
+                // succeeds. error_log is unset, as in the release image's
+                // php.ini, so a CLI child writes the line to its own
+                // stderr - the pipe the spawner reads. Before the relay
+                // the parent dropped it, so the line reached nobody.
+                ini_set('error_log', '');
+                error_log('OpenEMR.WARNING: synthetic service warning for the relay test');
+                $emit($name, 'executed');
+                exit(0);
+
             case 'ok':
                 // Baseline: real PHP reads the env var, encodes JSON,
                 // and emits a valid status line. Proves the full
@@ -224,6 +235,27 @@ class SymfonyBackgroundServiceSpawnerPhpChildTest extends TestCase
 
         $this->assertSame(['name' => 'ok', 'status' => 'executed'], $result);
         $this->assertSame([], $this->logger->warnings);
+    }
+
+    public function testSuccessfulChildStderrIsRelayedToTheParentLogger(): void
+    {
+        // A successful child's stderr is the only place its own logger
+        // (SystemLogger -> error_log) can write. The parent relays it
+        // once, sanitised, so it lands wherever the parent's log goes -
+        // under mod_php, Apache's ErrorLog and so the container output.
+        $result = $this->makeSpawner()->spawn('logs_then_ok', false, 60);
+
+        $this->assertSame(['name' => 'logs_then_ok', 'status' => 'executed'], $result);
+        $this->assertCount(1, $this->logger->warnings);
+        $record = $this->logger->warnings[0];
+        $this->assertSame('Background service subprocess wrote to stderr.', $record['message']);
+        $this->assertSame('logs_then_ok', $record['context']['service'] ?? null);
+        $stderr = $record['context']['stderr'] ?? null;
+        $this->assertIsString($stderr);
+        $this->assertStringContainsString('synthetic service warning for the relay test', $stderr);
+        // Sanitised like failure output (safeLogSnippet): error_log()'s
+        // trailing newline is escaped, never left to split the record.
+        $this->assertStringNotContainsString("\n", $stderr);
     }
 
     public function testDieWithoutJsonIsReportedAsMissingStatus(): void

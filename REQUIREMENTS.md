@@ -260,7 +260,7 @@ two columns); portrait stacks to one column; touch targets are at least 48 dp.
 | **FR-UI-1**<a id="fr-ui-1"></a> | Adaptive layout on Material window-size classes: landscape (≥ 840 dp) in the legacy arrangement; portrait (600–839 dp) one column in legacy order; compact usable. | P0 |
 | **FR-UI-2**<a id="fr-ui-2"></a> | Theme selector — Light, Dark, Match device (the default) — persisted per device; switching never reloads data. | P0 |
 | **FR-UI-3**<a id="fr-ui-3"></a> | App bar: the OpenEMR logo, the signed-in user with sign-out, the theme selector, patient search, and the app version (the package version plus the short commit when the build names one). | P0 |
-| **FR-UI-4**<a id="fr-ui-4"></a> | Privacy screen: when the app is hidden, an opaque cover goes up at once over everything, so the recents thumbnail shows no patient data. Back within the grace period (`VITE_PRIVACY_GRACE_SECONDS`, 0–900, default 60) the chart is as it was; hidden longer, the app signs out as [FR-AUTH-4](#fr-auth-4) does. | P0 |
+| **FR-UI-4**<a id="fr-ui-4"></a> | Privacy screen: when the app is hidden, an opaque cover goes up at once over everything, so the recents thumbnail shows no patient data. Back within the grace period (the token handler's `PRIVACY_GRACE_SECONDS`, served to the SPA at run time, 0–900, default 60) the chart is as it was; hidden longer, the app signs out as [FR-AUTH-4](#fr-auth-4) does. | P0 |
 | **FR-UI-5**<a id="fr-ui-5"></a> | Navigation: a rail in landscape, a drawer in portrait — Patients, Dashboard (disabled until a patient is open, still focusable, with a reason), Settings; the drawer may list this session's patients, held in memory only. | P0 |
 | **FR-UI-6**<a id="fr-ui-6"></a> | Patient sections: a tab list holding the Dashboard tab, then a separate "Open in OpenEMR" group of links to the patient's legacy screens. | P1 |
 | **FR-UI-7**<a id="fr-ui-7"></a> | Switching to another patient's chart and signing out each ask for confirmation in a modal whose safe action has initial focus; Escape cancels and focus returns to the opener. Browser Back / Forward onto another chart is not confirmed, because the chart shown is always the one the URL names. | P1 |
@@ -278,7 +278,7 @@ two columns); portrait stacks to one column; touch targets are at least 48 dp.
 
 | ID | Requirement | Pri |
 |---|---|---|
-| **FR-APP-1**<a id="fr-app-1"></a> | A **Patient apps** slot under the patient header, configured at build time by `VITE_PATIENT_APPS` — a JSON list of `{label, url, aclHint?}` whose absolute https `url` holds `{patientId}`, replaced by the open patient's FHIR id. Unset or invalid means no slot. Each app is a link opening in a new top-level tab — never an iframe ([BUG-25](#bug-25)) — described by "OpenEMR may ask you to sign in first." ([BUG-24](#bug-24)). AgentForge is launched through its module's `agenda-drilldown-launch.php?patient={patientId}` (API-47). | P1 |
+| **FR-APP-1**<a id="fr-app-1"></a> | A **Patient apps** slot under the patient header, configured at run time by the token handler's `PATIENT_APPS`, served to the SPA at `/bff/config` — a JSON list of `{label, url, aclHint?}` whose absolute https `url` holds `{patientId}`, replaced by the open patient's FHIR id. Unset or invalid means no slot. Each app is a link opening in a new top-level tab — never an iframe ([BUG-25](#bug-25)) — described by "OpenEMR may ask you to sign in first." ([BUG-24](#bug-24)). AgentForge is launched through its module's `agenda-drilldown-launch.php?patient={patientId}` (API-47). | P1 |
 
 ## 13. Non-functional requirements
 
@@ -448,7 +448,7 @@ service. It:
 
 - adds a **Launch AgentForge** button to the patient chart (the demographics page) that starts a SMART on FHIR
   launch of the copilot for that patient, in a modal frame or a new tab (`agentforge_launch_mode`);
-- adds a **Day's Agenda** menu item that launches the copilot's roster view (it can be hidden);
+- adds a **Daily Agenda** menu item that launches the copilot's roster view (it can be hidden);
 - exposes `public/agenda-drilldown-launch.php?patient={uuid}`, a launch keyed by the patient's FHIR id that
   re-checks the user's access, mints the patient-scoped launch and sets the bridge cookie in one top-level
   navigation — the entry the frontend's Patient apps slot uses (API-47);
@@ -456,7 +456,7 @@ service. It:
   the copilot, so it can extract facts before the visit (it does nothing unless an ingest address and a category
   map are set);
 - provides **synthetic demo-data seeders** (the AF-DEMO cardiology cohort, appointments, care teams) and a seeder
-  for an integration-test `client_credentials` client, both refused in production.
+  for an integration-test `client_credentials` client, neither to be declared in production.
 
 Its configuration is in [DEPLOYMENT.md](DEPLOYMENT.md) §5 and its seeders in the
 [module README](interface/modules/custom_modules/oe-module-agentforge/README.md).

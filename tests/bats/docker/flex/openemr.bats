@@ -45,6 +45,30 @@ setup() {
     assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'wait_for_swarm_completion'
 }
 
+@test "flex openemr.sh: background leader heartbeat during the flex build" {
+    assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'start_leader_heartbeat()'
+    assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'stop_leader_heartbeat()'
+    assert_script_contains "${SCRIPT_DIR}/openemr.sh" "trap 'stop_leader_heartbeat' EXIT"
+    # start before clone/build, stop after the build block
+    awk '
+        /start_leader_heartbeat$/ { start=NR }
+        /^stop_leader_heartbeat$/ { stop=NR }
+        /FLEX_BUILD_ONLY/ && !flex { flex=NR }
+        END {
+            if (!(start && stop && flex && start < stop && stop < flex)) {
+                print "heartbeat start/stop not wrapping the flex build"
+                exit 1
+            }
+        }
+    ' "${SCRIPT_DIR}/openemr.sh"
+}
+
+@test "flex openemr.sh: skips post-wait try_become_leader when already leader" {
+    assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'AUTHORITY}" != "yes"'
+    grep -A6 'Try one more time to become leader' "${SCRIPT_DIR}/openemr.sh" \
+        | grep -q 'AUTHORITY}" != "yes"'
+}
+
 @test "flex openemr.sh: INSANE_DEV_MODE or DEVELOPER_TOOLS" {
     assert_script_contains "${SCRIPT_DIR}/openemr.sh" 'EASY_DEV_MODE_NEW'
     grep -qE 'INSANE_DEV_MODE|DEVELOPER_TOOLS' "${SCRIPT_DIR}/openemr.sh"

@@ -1,6 +1,6 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {flushSync} from 'react-dom';
 
 import {OpenEmrLogo} from '../brand/OpenEmrLogo';
@@ -17,8 +17,10 @@ interface PrivacyCoverOptions {
 
 /**
  * Whether patient data must be covered. A PWA cannot set FLAG_SECURE, so when the app is hidden (`visibilitychange`)
- * the cover goes up synchronously — before the handler returns and Android takes its recents snapshot. Back within
- * the grace, it comes down; hidden longer (a timer, or the clock on return if the page was frozen), it signs out.
+ * the cover goes up synchronously — before the handler returns and Android takes its recents snapshot. Becoming
+ * active while already hidden does the same, so a sign-in that finishes off-screen cannot paint PHI first. Back
+ * within the grace, it comes down; hidden longer (a timer, or the clock on return if the page was frozen), it
+ * signs out.
  */
 export function usePrivacyCover({
   active,
@@ -32,7 +34,8 @@ export function usePrivacyCover({
     expire.current = onExpire;
   }, [onExpire]);
 
-  useEffect(() => {
+  // Before paint: becoming active while hidden must cover PHI in this frame, not the next.
+  useLayoutEffect(() => {
     if (!active) return;
     let hiddenAt: number | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -59,6 +62,8 @@ export function usePrivacyCover({
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
+    // Already hidden when we became active: no visibilitychange will fire until the next hide.
+    onVisibility();
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       clearTimeout(timer);

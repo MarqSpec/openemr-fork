@@ -151,6 +151,7 @@ describe('given an active service worker answering requests', () => {
 
     expect(handleFetch(ctx, request('/bff/session'))).toBeUndefined();
     expect(handleFetch(ctx, request('/bff/fhir/Patient/1'))).toBeUndefined();
+    expect(handleFetch(ctx, request('/bff/config'))).toBeUndefined();
     expect(network).not.toHaveBeenCalled();
     expect([...(caches.stores.get(MANIFEST.cacheName)?.keys() ?? [])]).toEqual(
       MANIFEST.urls,

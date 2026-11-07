@@ -16,6 +16,7 @@ import {
 } from './fhir_proxy.js';
 import {refreshAccessToken, RefreshError} from './oauth.js';
 import {createReadinessProbe} from './readiness.js';
+import {registerRuntimeConfigRoute} from './runtime_config.js';
 import {securityHeaders} from './security_headers.js';
 import type {Handshake, Session} from './session.js';
 import {registerSessionActivityRoute} from './session_activity.js';
@@ -94,6 +95,11 @@ export function buildServer(
       },
     },
   });
+
+  // A bad optional setting does not stop start-up (runtime_config.ts); say so once, by variable and rule.
+  for (const warning of config.warnings) {
+    app.log.warn({setting: warning}, 'optional setting ignored');
+  }
 
   app.addHook('preClose', done => {
     closing = true;
@@ -198,6 +204,9 @@ export function buildServer(
   registerSessionRoute(app, config, {discovery, sessions});
   // reference: INTERFACES.md API-46
   registerSessionActivityRoute(app, config, sessions);
+
+  // reference: INTERFACES.md API-48
+  registerRuntimeConfigRoute(app, config.spa);
 
   // reference: INTERFACES.md API-45
   // The build id lets a post-deploy check tell the new deployment from the one it replaced.

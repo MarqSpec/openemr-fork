@@ -3,20 +3,55 @@ import type {Page, Request} from '@playwright/test';
 // Local tier (no backend): layout-only stubs of the token handler. They pick which screen the SPA draws — signed
 // in or not — and catch the sign-in and sign-out form posts so a spec can check what the browser sent. They prove
 // nothing about the token handler itself; real sign-in and sign-out are the staging spec's
-// (staging/sign_in.spec.ts). reference: CONVENTIONS.md (Two tiers), INTERFACES.md API-40, API-42, API-43
+// (staging/sign_in.spec.ts). reference: CONVENTIONS.md (Two tiers), INTERFACES.md API-40, API-42, API-43,
+// API-48
 
 /** A synthetic clinician, as API-42 names them. */
 export const CLINICIAN = 'Dr. Avery Demo';
 
+/** What `/bff/config` (API-48) answers: the token handler's PATIENT_APPS and PRIVACY_GRACE_SECONDS, parsed. */
+export interface RuntimeConfig {
+  readonly patientApps: readonly {
+    readonly label: string;
+    readonly url: string;
+    readonly aclHint?: string;
+  }[];
+  readonly privacyGraceSeconds: number;
+}
+
+/** A token handler with neither variable set: no Patient apps slot, the 60 s grace. */
+export const UNCONFIGURED: RuntimeConfig = {
+  patientApps: [],
+  privacyGraceSeconds: 60,
+};
+
+/**
+ * `/bff/config` answers `config`. The SPA waits for it beside `/bff/session` before it draws anything signed in
+ * so every signed-in spec needs it; a spec about the config passes its own.
+ */
+export async function stubRuntimeConfig(
+  page: Page,
+  config: RuntimeConfig = UNCONFIGURED,
+): Promise<void> {
+  await page.route('**/bff/config', route =>
+    route.fulfill({status: 200, json: config}),
+  );
+}
+
 /** `/bff/session` answers 401: nobody is signed in, so the SPA shows W-1. */
 export async function stubSignedOut(page: Page): Promise<void> {
+  await stubRuntimeConfig(page);
   await page.route('**/bff/session', route =>
     route.fulfill({status: 401, json: {error: 'unauthenticated'}}),
   );
 }
 
-/** `/bff/session` answers 200 for {@link CLINICIAN}. */
-export async function stubSignedIn(page: Page): Promise<void> {
+/** `/bff/session` answers 200 for {@link CLINICIAN}, and `/bff/config` answers `config`. */
+export async function stubSignedIn(
+  page: Page,
+  config: RuntimeConfig = UNCONFIGURED,
+): Promise<void> {
+  await stubRuntimeConfig(page, config);
   await page.route('**/bff/session', route =>
     route.fulfill({
       status: 200,

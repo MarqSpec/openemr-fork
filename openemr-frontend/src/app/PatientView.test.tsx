@@ -3,9 +3,11 @@ import {QueryClientProvider} from '@tanstack/react-query';
 import {render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {http, HttpResponse} from 'msw';
+import type {ReactNode} from 'react';
 import {describe, expect, it, vi} from 'vitest';
 
 import {createQueryClient} from '../api/query_client';
+import {SessionProvider, useSession} from '../auth/SessionProvider';
 import {answerDashboardReads, regionsByName} from '../test/dashboard';
 import {TEST_PATIENT_ID, condition, patient} from '../test/fhir_fixtures';
 import {server} from '../test/msw_server';
@@ -14,14 +16,14 @@ import {createAppTheme} from '../theme/theme';
 import {PatientView} from './PatientView';
 
 // reference: REQUIREMENTS.md FR-HDR-1, FR-UI-1, FR-UI-7, FR-APP-1 · REQUIREMENTS.md
-// W-3, W-4, W-12c, W-13
+// W-3, W-4, W-12c, W-13 · INTERFACES.md API-48
 
 const AGENTFORGE = {
   label: 'Launch AgentForge',
   url: 'https://openemr.example.test/interface/modules/custom_modules/oe-module-agentforge/public/agenda-drilldown-launch.php?patient={patientId}',
 } as const;
 
-function renderView(apps?: readonly {label: string; url: string}[]): void {
+function renderView(): void {
   render(
     <QueryClientProvider
       client={createQueryClient({onSessionOver: vi.fn(), retryDelayMs: 0})}
@@ -30,10 +32,48 @@ function renderView(apps?: readonly {label: string; url: string}[]): void {
         <PatientView
           patientId={TEST_PATIENT_ID}
           clock={() => new Date(2026, 8, 25)}
-          {...(apps === undefined ? {} : {apps})}
         />
       </ThemeProvider>
     </QueryClientProvider>,
+  );
+}
+
+/** Says when the session and the runtime config have both arrived, as the app shell waits for before a chart. */
+function SignedInMark(): ReactNode {
+  return useSession().kind === 'signed-in' ? <p>Signed in</p> : null;
+}
+
+/**
+ * Signed in, as the app opens a chart: API-42 names a synthetic clinician and the token handler's runtime config
+ * (API-48) serves `apps` — the only place the patient-apps slot takes its entries from.
+ */
+function renderSignedInView(
+  apps: readonly {label: string; url: string}[],
+): void {
+  server.use(
+    http.get('/bff/session', () =>
+      HttpResponse.json({
+        authenticated: true,
+        user: {displayName: 'Dr. Avery Demo'},
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+        idleTimeoutSeconds: 900,
+        grantedScopes: ['openid', 'fhirUser'],
+      }),
+    ),
+    http.get('/bff/config', () =>
+      HttpResponse.json({patientApps: apps, privacyGraceSeconds: 60}),
+    ),
+  );
+  render(
+    <SessionProvider>
+      <ThemeProvider theme={createAppTheme('light')}>
+        <SignedInMark />
+        <PatientView
+          patientId={TEST_PATIENT_ID}
+          clock={() => new Date(2026, 8, 25)}
+        />
+      </ThemeProvider>
+    </SessionProvider>,
   );
 }
 
@@ -168,14 +208,15 @@ describe('given a patient chart is open', HEAVY_SUITE, () => {
 });
 
 describe(
-  'given AgentForge is configured as a patient app (FR-APP-1)',
+  'given the token handler serves AgentForge as a patient app (FR-APP-1, API-48)',
   HEAVY_SUITE,
   () => {
     it('when the chart renders, then the patient-apps slot sits under the patient header, above the dashboard, and launches this patient in a new tab (guards a launch for another patient or inside the app)', async () => {
       answerAllReads();
-      renderView([AGENTFORGE]);
+      renderSignedInView([AGENTFORGE]);
 
       await screen.findByText('Fakey Testperson');
+      await screen.findByRole('group', {name: 'Patient apps'});
       const region = regionsByName(document.body);
       const header = region('Patient');
       const dashboard = region('Dashboard');
@@ -200,14 +241,15 @@ describe(
 );
 
 describe(
-  'given no patient apps are configured (the default build)',
+  'given the token handler serves no patient apps (PATIENT_APPS unset, blank or invalid)',
   HEAVY_SUITE,
   () => {
     it('when the chart renders, then there is no patient-apps slot', async () => {
       answerAllReads();
-      renderView([]);
+      renderSignedInView([]);
 
       await screen.findByText('Fakey Testperson');
+      await screen.findByText('Signed in');
       expect(
         screen.queryByRole('group', {name: 'Patient apps'}),
       ).not.toBeInTheDocument();

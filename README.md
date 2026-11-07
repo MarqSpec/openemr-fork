@@ -5,7 +5,7 @@ records and practice management application. It carries the whole of OpenEMR, pl
 
 | Part | Where | What it is |
 |---|---|---|
-| **OpenEMR** | the repository root (`src/`, `interface/`, `library/`, `apis/`, `sql/`, …) | The upstream PHP application: health records, scheduling, billing, the OAuth2 / OpenID Connect server, the FHIR R4 and standard REST APIs. A small number of upstream files are changed; [ARCHITECTURE.md](ARCHITECTURE.md) §4 lists them. |
+| **OpenEMR** | the repository root (`src/`, `interface/`, `library/`, `apis/`, `sql/`, …) | The upstream PHP application: health records, scheduling, billing, the OAuth2 / OpenID Connect server, the FHIR R4 and standard REST APIs. A small number of upstream files are changed; [ARCHITECTURE.md](ARCHITECTURE.md) §4 lists the main ones. |
 | **AgentForge module** | [`interface/modules/custom_modules/oe-module-agentforge/`](interface/modules/custom_modules/oe-module-agentforge/README.md) | An OpenEMR custom module that launches the AgentForge clinical copilot — a separate service, not in this repository — from the patient chart and from a daily-agenda tab, over SMART on FHIR. It also forwards newly uploaded patient documents to the copilot and seeds a synthetic cardiology demo cohort. |
 | **Patient-dashboard frontend** | [`openemr-frontend/`](openemr-frontend/README.md) | A React + TypeScript single-page app that reimplements OpenEMR's patient dashboard, installable as a Progressive Web App (PWA) on an Android tablet. It reads only OpenEMR's public OAuth2 and FHIR APIs, through a small same-origin **token handler** (`openemr-frontend/bff/`, Node.js + Fastify) that holds the OAuth client and every token server-side. |
 
@@ -22,7 +22,7 @@ Never load real patient data into a development or test environment.
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Configuration, building the two images, the one-time OpenEMR setup, deploying and rolling back |
 | [CONVENTIONS.md](CONVENTIONS.md) | The coding and testing rules the frontend code follows |
 | [`openemr-frontend/bff/README.md`](openemr-frontend/bff/README.md) | The token handler in detail: routes, sign-in, session lifecycle, the FHIR read proxy |
-| Upstream: [API_README.md](API_README.md), [FHIR_README.md](FHIR_README.md), [DOCKER_README.md](DOCKER_README.md), [`Documentation/`](Documentation/) | OpenEMR's own API, FHIR, Docker and user documentation |
+| Upstream: [API_README.md](API_README.md), [FHIR_README.md](FHIR_README.md), [DOCKER_README.md](DOCKER_README.md), [Documentation/](Documentation/) | OpenEMR's own API, FHIR, Docker and user documentation |
 
 ## Build, run and test
 
@@ -61,7 +61,7 @@ vendor/bin/phpunit -c phpunit-isolated.xml --filter AgentForge
 
 The module ships inside the OpenEMR image and is registered and enabled automatically on first boot. Its
 settings (the copilot's launch addresses, the issuer, the document-ingest address and category map) are entered
-in OpenEMR under **Administration › Modules › Manage Modules › Custom Modules › AgentForge Launch Integration ›
+in OpenEMR under **Administration › Modules › Manage Modules › Custom Modules › Agent Forge Copilot ›
 gear icon**, or given as environment variables ([DEPLOYMENT.md](DEPLOYMENT.md) §5). The demo-data seeders and
 how to run them are in the [module README](interface/modules/custom_modules/oe-module-agentforge/README.md).
 
@@ -117,5 +117,5 @@ OpenEMR exists thanks to all the people who have contributed to it; its sponsors
 This repository is a derivative work of OpenEMR and is distributed under the **GNU General Public License,
 version 3** — see [LICENSE](LICENSE). The upstream copyright and licence notices in each file are kept as they
 are, and the frontend's `package.json` files declare the same licence (`GPL-3.0`). This repository is the
-complete corresponding source; third-party dependencies are pinned by `composer.lock` and the two
+complete corresponding source; third-party dependencies are pinned by `composer.lock` and the
 `package-lock.json` files, each under its own licence.

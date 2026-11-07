@@ -897,6 +897,26 @@ describe('given API-43 — POST /bff/logout', () => {
     expectCleared(response, REASON);
   });
 
+  it('when a lingering logout-reason cookie is cleared, then the clear uses the same Path, SameSite and Secure as the set', async () => {
+    const session = await signedInSession();
+    const setResponse = await logout(
+      {[SESSION]: session},
+      OWN_FORM_POST,
+      'reason=idle',
+    );
+    const setAttrs = attributes(setCookieLine(setResponse, REASON));
+    expect(setAttrs.get('path')).toBe('/');
+    expect(setAttrs.get('samesite')).toBe('Lax');
+    expect(setAttrs.has('secure')).toBe(true);
+
+    const clearResponse = await logout({[REASON]: 'idle'});
+    const clearAttrs = attributes(setCookieLine(clearResponse, REASON));
+    expectCleared(clearResponse, REASON);
+    expect(clearAttrs.get('path')).toBe(setAttrs.get('path'));
+    expect(clearAttrs.get('samesite')).toBe(setAttrs.get('samesite'));
+    expect(clearAttrs.has('secure')).toBe(setAttrs.has('secure'));
+  });
+
   it('when a cross-site page posts to it, then it is 403 and the session survives (FR-BFF-6)', async () => {
     const session = await signedInSession();
 

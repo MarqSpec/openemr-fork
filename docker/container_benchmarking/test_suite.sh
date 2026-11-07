@@ -1419,34 +1419,32 @@ EOF
         return 1
     fi
 
-    # Step 2: Get current version from container and verify all version files exist
+    # Read the image and code versions from the first container
     local current_version
     current_version=$(docker exec "${container_name}" cat /root/docker-version 2>/dev/null || echo "0")
     log_info "Current container version (from /root/docker-version): ${current_version}"
 
-    # Verify code version file exists (needed for upgrade check)
-    local code_version_exists
-    code_version_exists=$(docker exec "${container_name}" test -f /var/www/localhost/htdocs/openemr/docker-version && echo "1" || echo "0")
-    if [[ "${code_version_exists}" = "0" ]]; then
-        log_info "Creating code version file to match root version..."
-        docker exec "${container_name}" sh -c "echo -n '${current_version}' > /var/www/localhost/htdocs/openemr/docker-version" 2>/dev/null || true
-    fi
-
+    # The code marker must come from the image, not from this container's first
+    # install: the recreate below drops the container's writable layer, and only
+    # the image's copy survives it (#153). Never write it by hand here.
     local code_version
     code_version=$(docker exec "${container_name}" cat /var/www/localhost/htdocs/openemr/docker-version 2>/dev/null || echo "0")
     log_info "Code version (from /var/www/localhost/htdocs/openemr/docker-version): ${code_version}"
 
-    # Step 3: Set an older version in sites/default/docker-version to trigger upgrade
-    # Set it to version 1 (assuming current version is higher)
+    # Step 2: Set an older version in sites/default/docker-version to trigger upgrade
+    # Two versions back, so more than one fsupgrade has to run. Each one replays
+    # sql_upgrade, about a minute apiece, so starting from 1 outlasts the 600s
+    # health wait below.
+    local target_version=$(( current_version > 2 ? current_version - 2 : 1 ))
     log_info "Step 2: Setting older version marker to trigger upgrade..."
-    docker exec "${container_name}" sh -c 'echo -n "1" > /var/www/localhost/htdocs/openemr/sites/default/docker-version' 2>/dev/null || true
+    docker exec "${container_name}" sh -c "echo -n '${target_version}' > /var/www/localhost/htdocs/openemr/sites/default/docker-version" 2>/dev/null || true
 
     # Verify the old version was set
     local old_version
     old_version=$(docker exec "${container_name}" cat /var/www/localhost/htdocs/openemr/sites/default/docker-version 2>/dev/null || echo "0")
     log_info "Set sites version to: ${old_version}"
 
-    if [[ "${old_version}" != "1" ]]; then
+    if [[ "${old_version}" != "${target_version}" ]]; then
         log_test_result "${test_name}" "FAIL" "Failed to set old version marker"
         cd "${test_dir}"
         # shellcheck disable=SC2310  # Cleanup should not fail the test
@@ -1455,26 +1453,23 @@ EOF
         return 1
     fi
 
-    # Step 4: Get log position before restart to only check new logs
-    log_info "Step 3: Getting current log position..."
-    local log_size_before
-    # shellcheck disable=SC2034  # log_size_before is captured but not used (reserved for future debugging)
-    log_size_before=$(docker logs "${container_name}" 2>&1 | wc -l) || log_size_before="0"
-
-    # Step 5: Restart container to trigger upgrade check
-    log_info "Step 4: Restarting container to trigger upgrade..."
+    # Step 3: Swap the image -- a new container from the image on the same
+    # sites/ volume. A restart would keep the old container's writable layer,
+    # and with it anything the first install wrote outside sites/, which an
+    # image swap does not (#153). The new container's logs hold only this boot.
+    log_info "Step 3: Recreating the openemr container on the same sites/ volume..."
     cd "${test_dir}"
-    # shellcheck disable=SC2310  # Restart may fail if container is not running, which is acceptable
-    run_docker_compose "${PROJECT_NAME}-upgrade" -f docker-compose.yml restart openemr 2>&1 | tee -a "${LOG_FILE}" || true
+    # shellcheck disable=SC2310  # A failed recreate is caught by wait_for_healthy below
+    run_docker_compose "${PROJECT_NAME}-upgrade" -f docker-compose.yml up -d --force-recreate --no-deps openemr 2>&1 | tee -a "${LOG_FILE}" || true
     cd - >/dev/null
 
-    # Wait a moment for container to restart
+    # Wait a moment for the new container to start
     sleep 5
 
-    # Wait for container to be healthy again after restart
+    # Wait for container to be healthy after the recreate
     # shellcheck disable=SC2310
     if ! wait_for_healthy "${container_name}" 600; then
-        log_test_result "${test_name}" "FAIL" "Container did not become healthy after restart"
+        log_test_result "${test_name}" "FAIL" "Container did not become healthy after the recreate"
         docker logs "${container_name}" --tail 50 2>&1 | tee -a "${LOG_FILE}" || true
         cd "${test_dir}"
         # shellcheck disable=SC2310  # Cleanup should not fail the test
@@ -1486,23 +1481,41 @@ EOF
     # Give upgrade time to complete if it's running
     sleep 10
 
-    # Step 6: Check logs for upgrade messages (only new logs since restart)
-    log_info "Step 5: Checking upgrade logs..."
+    # Step 4: Check logs for upgrade messages (the new container logs only this boot)
+    log_info "Step 4: Checking upgrade logs..."
     local all_logs
     all_logs=$(docker logs "${container_name}" 2>&1 || echo "")
 
+    # Here-strings, not `echo | grep -q`: on a log this size grep -q exits on the
+    # first match, echo takes SIGPIPE, and pipefail turns a match into a miss.
     local upgrade_started
-    upgrade_started=$(echo "${all_logs}" | grep -q "Starting OpenEMR upgrade process\|Upgrade detected" && echo "1" || echo "0")
+    upgrade_started=$(grep -q "Starting OpenEMR upgrade process\|Upgrade detected" <<< "${all_logs}" && echo "1" || echo "0")
 
     local upgrade_completed
-    upgrade_completed=$(echo "${all_logs}" | grep -q "OpenEMR upgrade completed successfully" && echo "1" || echo "0")
+    upgrade_completed=$(grep -q "OpenEMR upgrade completed successfully" <<< "${all_logs}" && echo "1" || echo "0")
 
     # Also check for upgrade script execution messages
     local upgrade_scripts_run
-    upgrade_scripts_run=$(echo "${all_logs}" | grep -q "Processing fsupgrade-.*\.sh upgrade script" && echo "1" || echo "0")
+    upgrade_scripts_run=$(grep -q "Processing fsupgrade-.*\.sh upgrade script" <<< "${all_logs}" && echo "1" || echo "0")
 
-    # Step 7: Verify version marker was updated
-    log_info "Step 6: Verifying version marker was updated..."
+    # Every fsupgrade above the old marker, up to the image's version, must have run
+    local all_scripts_run="1"
+    local missing_scripts=""
+    local script_number
+    for (( script_number = old_version + 1; script_number <= current_version; script_number++ )); do
+        if ! grep -qF "Completed: Processing fsupgrade-${script_number}.sh upgrade script" <<< "${all_logs}"; then
+            all_scripts_run="0"
+            missing_scripts="${missing_scripts} ${script_number}"
+        fi
+    done
+    if [[ "${all_scripts_run}" = "1" ]]; then
+        log_info "fsupgrade-$((old_version + 1)) through fsupgrade-${current_version} all ran"
+    else
+        log_info "fsupgrade scripts that did not run:${missing_scripts}"
+    fi
+
+    # Step 5: Verify version marker was updated
+    log_info "Step 5: Verifying version marker was updated..."
     local new_version
     new_version=$(docker exec "${container_name}" cat /var/www/localhost/htdocs/openemr/sites/default/docker-version 2>/dev/null || echo "0")
     log_info "Version after upgrade: ${new_version} (was ${old_version}, should be ${current_version})"
@@ -1510,11 +1523,10 @@ EOF
     # Also verify the version files exist and match
     local root_version
     root_version=$(docker exec "${container_name}" cat /root/docker-version 2>/dev/null || echo "0")
-    local code_version
     code_version=$(docker exec "${container_name}" cat /var/www/localhost/htdocs/openemr/docker-version 2>/dev/null || echo "0")
     log_info "Root version: ${root_version}, Code version: ${code_version}, Sites version: ${new_version}"
 
-    # Step 8: Verify OpenEMR is still configured and accessible
+    # Step 6: Verify OpenEMR is still configured and accessible
     local config_after_upgrade
     config_after_upgrade=$(check_openemr_configured "${container_name}")
 
@@ -1533,28 +1545,24 @@ EOF
     cd - >/dev/null
 
     # Evaluate test results
-    # Upgrade is successful if:
-    # 1. Version was updated from old to current (even if logs aren't perfect)
-    # 2. OR upgrade messages are found in logs
-    # 3. AND OpenEMR is still configured and accessible
+    # Upgrade is successful only if, on the new container:
+    # 1. the sites marker moved from old to current,
+    # 2. the upgrade completed and every fsupgrade above the old marker ran,
+    # 3. and OpenEMR is still configured and accessible
     local version_updated="0"
     if [[ "${new_version}" = "${current_version}" ]] && [[ "${new_version}" != "${old_version}" ]]; then
         version_updated="1"
     fi
 
     if [[ "${version_updated}" = "1" ]] && \
+       [[ "${upgrade_completed}" = "1" ]] && \
+       [[ "${all_scripts_run}" = "1" ]] && \
        [[ "${config_after_upgrade}" = "1" ]] && \
        [[ "${http_status}" = "200" ]]; then
-        log_test_result "${test_name}" "PASS" "Upgrade completed successfully (${old_version} -> ${new_version})"
-        return 0
-    elif [[ "${upgrade_started}" = "1" ]] && \
-         [[ "${upgrade_completed}" = "1" ]] && \
-         [[ "${config_after_upgrade}" = "1" ]] && \
-         [[ "${http_status}" = "200" ]]; then
-        log_test_result "${test_name}" "PASS" "Upgrade completed successfully (logs confirmed)"
+        log_test_result "${test_name}" "PASS" "Image swap upgraded the site (${old_version} -> ${new_version}), fsupgrade-$((old_version + 1))..${current_version} ran"
         return 0
     else
-        log_test_result "${test_name}" "FAIL" "Upgrade started: ${upgrade_started}, Completed: ${upgrade_completed}, Scripts run: ${upgrade_scripts_run}, Version updated: ${version_updated} (${old_version} -> ${new_version}), Config: ${config_after_upgrade}, HTTP: ${http_status}"
+        log_test_result "${test_name}" "FAIL" "Upgrade started: ${upgrade_started}, Completed: ${upgrade_completed}, Scripts run: ${upgrade_scripts_run}, Missing scripts:${missing_scripts:- none}, Version updated: ${version_updated} (${old_version} -> ${new_version}), Code version: ${code_version}, Config: ${config_after_upgrade}, HTTP: ${http_status}"
         return 1
     fi
 }

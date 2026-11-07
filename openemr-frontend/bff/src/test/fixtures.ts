@@ -90,6 +90,8 @@ export function testConfig(
     logLevel: 'silent',
     session: {idleTimeoutMs: 15 * 60 * 1000, maxSessionMs: 10 * 60 * 60 * 1000},
     build: 'unknown',
+    spa: {patientApps: [], privacyGraceSeconds: 60},
+    warnings: [],
     ...overrides,
   };
 }

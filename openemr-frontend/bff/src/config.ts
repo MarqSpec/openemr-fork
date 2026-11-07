@@ -1,6 +1,10 @@
 import {existsSync, statSync} from 'node:fs';
 import path from 'node:path';
 import {inspect} from 'node:util';
+import {
+  parseSpaRuntimeConfig,
+  type SpaRuntimeConfig,
+} from './runtime_config.js';
 
 export const LOG_LEVELS = [
   'fatal',
@@ -94,6 +98,10 @@ export interface Config {
   session: SessionLimits;
   /** The commit the image was built from (`BUILD_SHA`), or `unknown`; public, reported by `/bff/health`. */
   build: string;
+  /** The SPA's per-environment settings (`PATIENT_APPS`, `PRIVACY_GRACE_SECONDS`), served by `/bff/config`. */
+  spa: SpaRuntimeConfig;
+  /** Optional settings ignored at start-up, as `VARIABLE: rule` — never the value; logged as warnings. */
+  warnings: readonly string[];
 }
 
 /** Raised at start-up; its message names each bad variable and the rule, never the value. */
@@ -120,6 +128,10 @@ export function loadConfig(env: Environment): Config {
   const fail: Fail = (variable, rule) => {
     problems.push(`${variable}: ${rule}`);
   };
+  const warnings: string[] = [];
+  const spa = parseSpaRuntimeConfig(env, (variable, rule) => {
+    warnings.push(`${variable}: ${rule}`);
+  });
 
   const port = parseInteger(env, 'PORT', 8080, 1, 65_535, fail);
   const readyTimeoutMs = parseInteger(
@@ -264,6 +276,8 @@ export function loadConfig(env: Environment): Config {
       maxSessionMs: maxSessionS * 1000,
     },
     build,
+    spa,
+    warnings,
   };
 }
 

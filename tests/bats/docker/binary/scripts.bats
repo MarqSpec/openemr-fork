@@ -42,7 +42,7 @@ setup() {
 }
 
 @test "binary: upgrade scripts exist and have valid syntax" {
-    for i in 1 2 3 4 5 6 7 8; do
+    for i in 1 2 3 4 5 6 7 8 9 10 11; do
         assert_script_syntax "${SCRIPT_DIR}/upgrade/fsupgrade-${i}.sh"
     done
 }
@@ -53,4 +53,9 @@ setup() {
 
 @test "binary: Dockerfile exists" {
     assert_file_exists "${SCRIPT_DIR}/Dockerfile"
+}
+
+@test "binary: Dockerfile fails the build on PHP older than 8.5.12 (PHP2Shell)" {
+    assert_script_contains "${SCRIPT_DIR}/Dockerfile" '^ARG PHP_MIN_VERSION=8\.5\.12$'
+    assert_script_contains "${SCRIPT_DIR}/Dockerfile" 'version_compare(PHP_VERSION, getenv("PHP_MIN_VERSION"), "<")'
 }

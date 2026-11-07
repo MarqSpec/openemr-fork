@@ -1,7 +1,7 @@
 import {useQueryClient} from '@tanstack/react-query';
-import {act, fireEvent, render, screen} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {http, HttpResponse} from 'msw';
+import {delay, http, HttpResponse} from 'msw';
 import type {ReactNode} from 'react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 
@@ -10,10 +10,11 @@ import {patient, TEST_PATIENT_ID} from '../test/fhir_fixtures';
 import {server} from '../test/msw_server';
 import {SessionProvider, useSession} from './SessionProvider';
 
-// reference: REQUIREMENTS.md FR-AUTH-3, FR-AUTH-5, FR-UI-3 · INTERFACES.md API-42 · a separate change (note 85517),
-// a separate change (note 87776: bfcache), a separate change (note 87130)
+// reference: REQUIREMENTS.md FR-AUTH-3, FR-AUTH-5, FR-UI-3, FR-UI-4 · INTERFACES.md API-42, API-48 ·
+// a separate change (note 85517), a separate change (note 87776: bfcache), a separate change (note 87130), a separate change
 
 const SESSION_URL = '/bff/session';
+const CONFIG_URL = '/bff/config';
 const PATIENT_URL = `/bff/fhir/Patient/${TEST_PATIENT_ID}`;
 /** A synthetic patient name that must be gone from the DOM once the session is over. */
 const PATIENT_FAMILY = 'Zzphi-Testperson';
@@ -39,6 +40,20 @@ function sessionHandler(respond: () => Response) {
   );
   return counter;
 }
+
+/** Counts every /bff/config request and answers with the given responder. */
+function configHandler(respond: () => Response | Promise<Response>) {
+  const counter = {count: 0};
+  server.use(
+    http.get(CONFIG_URL, () => {
+      counter.count += 1;
+      return respond();
+    }),
+  );
+  return counter;
+}
+
+const CONFIG = {patientApps: [], privacyGraceSeconds: 60};
 
 /** Stands in for a patient view: renders PHI from a FHIR read and can refresh it, as a card will. */
 function PatientProbe(): ReactNode {
@@ -173,6 +188,83 @@ describe('given the app starts', () => {
       await screen.findByText('signed in as Dr. Avery Demo'),
     ).toBeInTheDocument();
     expect(reads.count).toBe(2);
+  });
+});
+
+describe('given the runtime config the token handler serves (API-48)', () => {
+  it('when the session is live but /bff/config has not answered, then the state stays checking: no chart renders before the privacy grace is known', async () => {
+    const sessionReads = sessionHandler(() => HttpResponse.json(signedIn()));
+    configHandler(async () => {
+      await delay('infinite');
+      return HttpResponse.json(CONFIG);
+    });
+    renderProbe();
+
+    // Give the session's 200 time to land: on its own it would draw the chart.
+    await waitFor(() => {
+      expect(sessionReads.count).toBe(1);
+    });
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    });
+    expect(screen.getByText('checking')).toBeInTheDocument();
+    expect(screen.queryByRole('region', {name: 'Chart'})).toBeNull();
+  });
+
+  it('when /bff/config fails (503) while the session is live, then the state is unknown, never signed in, and it is not retried behind the user’s back (guards PHI on screen with no known privacy grace)', async () => {
+    sessionHandler(() => HttpResponse.json(signedIn()));
+    const reads = configHandler(() => new HttpResponse(null, {status: 503}));
+    renderProbe();
+
+    expect(await screen.findByText('session unknown')).toBeInTheDocument();
+    expect(screen.queryByText(/signed in as/)).toBeNull();
+    expect(reads.count).toBe(1);
+  });
+
+  it('when /bff/config answers a grace it cannot read, then the state is unknown, never signed in with a guessed grace', async () => {
+    sessionHandler(() => HttpResponse.json(signedIn()));
+    configHandler(() =>
+      HttpResponse.json({patientApps: [], privacyGraceSeconds: 'soon'}),
+    );
+    renderProbe();
+
+    expect(await screen.findByText('session unknown')).toBeInTheDocument();
+  });
+
+  it('when /bff/config gets no answer, then the state is offline, not "unknown"', async () => {
+    sessionHandler(() => HttpResponse.json(signedIn()));
+    configHandler(() => HttpResponse.error());
+    renderProbe();
+
+    expect(await screen.findByText('offline')).toBeInTheDocument();
+  });
+
+  it('when the user retries after /bff/config failed and it answers, then they are signed in', async () => {
+    let fail = true;
+    sessionHandler(() => HttpResponse.json(signedIn()));
+    const reads = configHandler(() =>
+      fail ? new HttpResponse(null, {status: 503}) : HttpResponse.json(CONFIG),
+    );
+    renderProbe();
+    await screen.findByText('session unknown');
+
+    fail = false;
+    await userEvent.click(screen.getByRole('button', {name: 'Retry'}));
+
+    expect(
+      await screen.findByText('signed in as Dr. Avery Demo'),
+    ).toBeInTheDocument();
+    expect(reads.count).toBe(2);
+  });
+
+  it('when nobody is signed in (401), then sign-in is shown whatever /bff/config answers (guards a config outage hiding sign-in)', async () => {
+    sessionHandler(() =>
+      HttpResponse.json({error: 'unauthenticated'}, {status: 401}),
+    );
+    configHandler(() => new HttpResponse(null, {status: 503}));
+    renderProbe();
+
+    expect(await screen.findByText('not signed in')).toBeInTheDocument();
   });
 });
 

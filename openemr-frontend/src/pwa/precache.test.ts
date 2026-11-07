@@ -99,6 +99,13 @@ describe('given a request reaching the service worker', () => {
     );
   });
 
+  it('when it is the runtime config read, then it goes to the network untouched, so a changed service variable is never answered from an old cache', () => {
+    expect(routeFor(get('/bff/config'), ORIGIN, PRECACHED)).toBe('network');
+    expect(routeFor(get('/bff/config'), ORIGIN, new Set(['/bff/config']))).toBe(
+      'network',
+    );
+  });
+
   it('when it is a /bff navigation such as the sign-in callback, then it goes to the network untouched (guards the offline shell answering OAuth)', () => {
     expect(
       routeFor(

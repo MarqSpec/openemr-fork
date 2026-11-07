@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 
 import {isSignedOutPath, signedOutNotice} from './signed_out';
 
@@ -10,7 +10,58 @@ const IDLE_TITLE = 'Signed out for inactivity';
 
 afterEach(() => {
   document.cookie = 'bff-logout-reason=; Max-Age=0; Path=/';
+  vi.unstubAllGlobals();
 });
+
+/** The raw `document.cookie` assignments, so Path / SameSite / Secure are visible. */
+function captureCookieWrites(): {writes: string[]; restore: () => void} {
+  const writes: string[] = [];
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Document.prototype,
+    'cookie',
+  );
+  if (
+    typeof descriptor?.get !== 'function' ||
+    typeof descriptor.set !== 'function'
+  ) {
+    throw new Error('expected document.cookie accessor on Document.prototype');
+  }
+  const readCookie: () => string = descriptor.get.bind(document);
+  const writeCookie: (value: string) => void = descriptor.set.bind(document);
+  Object.defineProperty(document, 'cookie', {
+    configurable: true,
+    enumerable: true,
+    get(): string {
+      return readCookie();
+    },
+    set(value: string): void {
+      writes.push(value);
+      writeCookie(value);
+    },
+  });
+  return {
+    writes,
+    restore() {
+      Reflect.deleteProperty(document, 'cookie');
+    },
+  };
+}
+
+function cookieWriteAttributes(line: string): Map<string, string> {
+  return new Map(
+    line
+      .split(';')
+      .slice(1)
+      .map(part => part.trim())
+      .filter(part => part.length > 0)
+      .map(part => {
+        const eq = part.indexOf('=');
+        return eq === -1
+          ? ([part.toLowerCase(), ''] as const)
+          : ([part.slice(0, eq).toLowerCase(), part.slice(eq + 1)] as const);
+      }),
+  );
+}
 
 describe('given the token handler sent the browser to /signed-out', () => {
   it('when there is no reason, then the notice says the user is signed out and patient data is cleared', () => {
@@ -54,6 +105,54 @@ describe('given the token handler sent the browser to /signed-out', () => {
       body: 'You were signed out after a period of inactivity. Patient data has been cleared from this tablet. Sign in again to continue.',
     });
     expect(document.cookie).not.toContain('bff-logout-reason=');
+  });
+
+  it('when the page is HTTPS, then the logout-reason cookie is cleared with Secure, Path=/ and SameSite=Lax, matching how the token handler set it', () => {
+    document.cookie = 'bff-logout-reason=idle; Path=/';
+    vi.stubGlobal('location', {protocol: 'https:'});
+    const captured = captureCookieWrites();
+
+    try {
+      expect(signedOutNotice('').title).toBe(IDLE_TITLE);
+      const clear = captured.writes.find(line =>
+        line.startsWith('bff-logout-reason='),
+      );
+      expect(
+        clear,
+        'a document.cookie clear of bff-logout-reason',
+      ).toBeDefined();
+      const attrs = cookieWriteAttributes(String(clear));
+      expect(attrs.get('path')).toBe('/');
+      expect(attrs.get('samesite')).toBe('Lax');
+      expect(attrs.has('secure')).toBe(true);
+      expect(attrs.get('max-age')).toBe('0');
+    } finally {
+      captured.restore();
+    }
+  });
+
+  it('when the page is HTTP, then the logout-reason cookie is cleared without Secure, matching the token handler in insecure cookie mode', () => {
+    document.cookie = 'bff-logout-reason=idle; Path=/';
+    vi.stubGlobal('location', {protocol: 'http:'});
+    const captured = captureCookieWrites();
+
+    try {
+      expect(signedOutNotice('').title).toBe(IDLE_TITLE);
+      const clear = captured.writes.find(line =>
+        line.startsWith('bff-logout-reason='),
+      );
+      expect(
+        clear,
+        'a document.cookie clear of bff-logout-reason',
+      ).toBeDefined();
+      const attrs = cookieWriteAttributes(String(clear));
+      expect(attrs.get('path')).toBe('/');
+      expect(attrs.get('samesite')).toBe('Lax');
+      expect(attrs.has('secure')).toBe(false);
+      expect(attrs.get('max-age')).toBe('0');
+    } finally {
+      captured.restore();
+    }
   });
 
   it.each([

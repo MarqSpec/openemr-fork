@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {expect, test, type BrowserContext, type Page} from '@playwright/test';
 
 import {blockingViolations} from './axe';
-import {CLINICIAN} from './bff_stubs';
+import {CLINICIAN, UNCONFIGURED} from './bff_stubs';
 
 // The service worker exists only in the built app, so this spec runs in the `pwa` project against `vite preview`.
 // /bff/* is stubbed on the browser context for layout only (bff_stubs.ts has the rule): a context route also sees a
@@ -78,6 +78,14 @@ async function stubBff(context: BrowserContext): Promise<BffStub> {
             },
           })
         : route.fulfill({status: 401, json: {error: 'unauthenticated'}}));
+      return;
+    }
+    if (url.pathname === '/bff/config') {
+      await route.fulfill({
+        status: 200,
+        headers: {'cache-control': 'no-store'},
+        json: UNCONFIGURED,
+      });
       return;
     }
     if (url.pathname === '/bff/logout') {
@@ -166,6 +174,7 @@ test('when a clinician signs in, reads patient data and signs out, then Cache St
       '/bff/fhir/Patient/1',
       '/bff/fhir/Patient/1',
       '/bff/session',
+      '/bff/config',
     ];
     const texts: string[] = [];
     for (const path of paths) {

@@ -1,6 +1,6 @@
 import {expect, test, type Page} from '@playwright/test';
 
-import {CLINICIAN} from './bff_stubs';
+import {CLINICIAN, stubRuntimeConfig, UNCONFIGURED} from './bff_stubs';
 
 // Sign-out, then Back, with the back/forward cache ON. Playwright disables it by default and its headless shell
 // refuses it, so this spec runs only in the `bfcache` project (full Chromium, the switch dropped) against the built
@@ -96,6 +96,7 @@ test('when a clinician signs out and the next person presses Back, then the rest
 }) => {
   let signedIn = true;
   let sessionReads = 0;
+  await stubRuntimeConfig(page);
   await page.route('**/bff/session', route => {
     sessionReads += 1;
     return signedIn
@@ -184,6 +185,9 @@ test('when the service worker controls the page, a clinician signs out and the n
 }) => {
   let signedIn = true;
   let sessionReads = 0;
+  await context.route('**/bff/config', route =>
+    route.fulfill({status: 200, json: UNCONFIGURED}),
+  );
   await context.route('**/bff/session', route => {
     sessionReads += 1;
     return signedIn

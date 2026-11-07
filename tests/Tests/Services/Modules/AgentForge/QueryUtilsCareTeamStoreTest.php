@@ -2,7 +2,7 @@
 
 /**
  * DB-backed test for the AgentForge demo care-team seeder's QueryUtils store
- *: seeds a throwaway synthetic patient twice, asserts the second run
+ * : seeds a throwaway synthetic patient twice, asserts the second run
  * adds no rows, and reads the team back through CareTeamService — the service
  * FHIR `CareTeam?patient=` is built on — to prove the rows carry a Practitioner
  * and an Organization participant.

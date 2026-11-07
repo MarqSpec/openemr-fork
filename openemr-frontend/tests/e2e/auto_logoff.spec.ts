@@ -1,15 +1,25 @@
 import {expect, test, type Page} from '@playwright/test';
 
 import {blockingViolations} from './axe';
-import {capturePost, CLINICIAN, stubPatientSearch} from './bff_stubs';
+import {
+  capturePost,
+  CLINICIAN,
+  stubPatientSearch,
+  stubRuntimeConfig,
+  UNCONFIGURED,
+} from './bff_stubs';
 
 // Automatic logoff (W-6) and the privacy screen (W-7), local tier, on Playwright's fake clock. /bff/session is
 // stubbed for layout only, with a far expiry so the client idle clock (idleTimeoutSeconds) is what fires; the
 // server-clock cases are the unit tests' (src/auth/auto_logoff.test.tsx).
-// reference: REQUIREMENTS.md FR-AUTH-4, FR-UI-4, NFR-A11Y-1 · INTERFACES.md API-42, API-43, API-46 ·
-// REQUIREMENTS.md W-6, W-7
+// reference: REQUIREMENTS.md FR-AUTH-4, FR-UI-4, NFR-A11Y-1 · INTERFACES.md API-42, API-43, API-46,
+// API-48 · REQUIREMENTS.md W-6, W-7
 
-async function stubSession(page: Page): Promise<void> {
+async function stubSession(
+  page: Page,
+  privacyGraceSeconds = UNCONFIGURED.privacyGraceSeconds,
+): Promise<void> {
+  await stubRuntimeConfig(page, {...UNCONFIGURED, privacyGraceSeconds});
   await page.route('**/bff/session', route =>
     route.fulfill({
       status: 200,
@@ -32,9 +42,12 @@ const accountButton = (page: Page) =>
 const warning = (page: Page) =>
   page.getByRole('alertdialog', {name: 'Still there?'});
 
-async function signedIn(page: Page): Promise<void> {
+async function signedIn(
+  page: Page,
+  privacyGraceSeconds?: number,
+): Promise<void> {
   await page.clock.install();
-  await stubSession(page);
+  await stubSession(page, privacyGraceSeconds);
   await page.goto('/');
   await expect(accountButton(page)).toBeVisible();
 }
@@ -126,6 +139,7 @@ test('given a signed-in clinician reading a chart that makes no server request, 
   let elapsed = 0;
   let serverEnds = 15 * 60 * 1000;
   let keepAlives = 0;
+  await stubRuntimeConfig(page);
   await page.route('**/bff/session', route =>
     route.fulfill({
       status: 200,
@@ -176,6 +190,34 @@ for (const theme of ['Light', 'Dark'] as const) {
   });
 }
 
+test('given the page is already hidden when sign-in completes, when the session becomes signed-in, then the privacy cover is up and the grace clock is running (guards PHI painted into a hidden page)', async ({
+  page,
+}) => {
+  await page.clock.install();
+  await stubSession(page);
+  await stubPatientSearch(page, 1);
+  await page.addInitScript(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+  });
+  const sent = await capturePost(page, '/bff/logout');
+  await page.goto('/patient/test-patient-0001');
+
+  await expect(page.getByText('Patient data hidden')).toBeVisible();
+  await expect(page.getByText('Fakey1 Testperson')).toBeHidden();
+  await expect(accountButton(page)).toBeHidden();
+
+  await page.clock.runFor('01:05');
+  await page.waitForURL('**/bff/logout');
+
+  expect(sent()).toMatchObject({
+    method: 'POST',
+    body: 'reason=idle',
+  });
+});
+
 test.describe('given a signed-in clinician who switches away from the app (W-7)', () => {
   test.beforeEach(async ({page}) => {
     await signedIn(page);
@@ -207,6 +249,35 @@ test.describe('given a signed-in clinician who switches away from the app (W-7)'
       method: 'POST',
       body: 'reason=idle',
     });
+  });
+});
+
+test.describe('given the token handler serves a 10 s privacy grace (PRIVACY_GRACE_SECONDS)', () => {
+  test.beforeEach(async ({page}) => {
+    await signedIn(page, 10);
+  });
+
+  test('when the app stays hidden for 15 s, then it signs out through /bff/logout — the served grace, not the 60 s default (guards a grace baked into the build)', async ({
+    page,
+  }) => {
+    const sent = await capturePost(page, '/bff/logout');
+    await setVisibility(page, 'hidden');
+
+    await page.clock.runFor('00:15');
+    await page.waitForURL('**/bff/logout');
+
+    expect(sent()).toMatchObject({method: 'POST', body: 'reason=idle'});
+  });
+
+  test('when the app is back within 8 s, then the cover lifts and the clinician is still signed in', async ({
+    page,
+  }) => {
+    await setVisibility(page, 'hidden');
+    await page.clock.runFor('00:08');
+    await setVisibility(page, 'visible');
+
+    await expect(page.getByText('Patient data hidden')).toBeHidden();
+    await expect(accountButton(page)).toBeVisible();
   });
 });
 

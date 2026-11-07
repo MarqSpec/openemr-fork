@@ -38,7 +38,7 @@ import {fhirGet} from './transport';
 
 // One function per inventory row (API-15 and API-16 send the same search, so they share one); each sends exactly the
 // search INTERFACES.md specifies and nothing else. Client-side filtering (active status, sort order) belongs
-// to the card. reference: API-11…21
+// to the card. reference: API-11…24
 
 type Signal = AbortSignal | undefined;
 

@@ -143,6 +143,12 @@ RUN usermod -u 1000 apache
 # The symlink ensures 'php' command points to the correct versioned binary
 RUN ln -sf /usr/bin/php${PHP_VERSION_ABBR} /usr/bin/php
 
+# PHP2Shell (CVE-2026-109618 / CVE-2026-109619, unauthenticated RCE, exploited in the wild) is fixed in
+# PHP 8.5.12 (Alpine php85 8.5.12-r0, published 2026-10-22). The php85 package above is unpinned, so fail
+# the build if apk resolved anything older (a stale mirror, or a php layer reused from the build cache).
+ARG PHP_MIN_VERSION=8.5.12
+RUN php -r 'if (version_compare(PHP_VERSION, getenv("PHP_MIN_VERSION"), "<")) { fwrite(STDERR, "PHP " . PHP_VERSION . " is older than " . getenv("PHP_MIN_VERSION") . " (PHP2Shell, CVE-2026-109618/-109619); rebuild with --no-cache\n"); exit(1); }'
+
 # Install Composer (PHP dependency manager) for OpenEMR package installation
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin --filename=composer
 
@@ -157,7 +163,10 @@ RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin -
 # Examples:
 #   - Branch: --build-arg OPENEMR_VERSION=master
 #   - Tag:    --build-arg OPENEMR_VERSION=v7.0.5
-ARG OPENEMR_VERSION=master
+# Pinned to an upstream release tag, not master: upstream master removed ccdaservice/, which
+# this Dockerfile still builds, so the docker/release test builds (which pass no build-arg) broke on
+# upstream changes alone. Release builds still override this from .github/release-targets.yml.
+ARG OPENEMR_VERSION=v8_4_1
 FROM base AS openemr-source
 RUN git clone https://github.com/openemr/openemr.git --branch "${OPENEMR_VERSION}" --depth 1 \
     && rm -rf openemr/.git
@@ -290,6 +299,12 @@ COPY upgrade/docker-version \
      upgrade/fsupgrade-10.sh \
      upgrade/fsupgrade-11.sh \
      /root/
+
+# The same file also marks the version of the code in the webroot. openemr.sh's
+# check_upgrade runs the fsupgrade scripts only when this matches
+# /root/docker-version, so it has to come with the image: a container started
+# from a new image on an old sites/ volume would otherwise never upgrade (#153).
+COPY upgrade/docker-version /var/www/localhost/htdocs/openemr/docker-version
 
 # Set upgrade scripts as executable (read and execute for owner only)
 RUN chmod 500 \

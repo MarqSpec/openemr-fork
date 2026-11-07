@@ -2,14 +2,14 @@
 
 The same-origin **token handler (BFF)** for the SPA ([PRD Q-7](../../REQUIREMENTS.md#q-7), option A): it
 serves the built SPA and its own `/bff/*` routes from one origin
-([FR-BFF-1…7](../../REQUIREMENTS.md#bff--token-handler); calls API-40…46 in
+([FR-BFF-1…7](../../REQUIREMENTS.md#bff--token-handler); calls API-40…46 and API-48 in
 [`INTERFACES.md`](../../INTERFACES.md#11-transport--the-token-handler-bff)).
 Node 22 + TypeScript on **Fastify 5**, Google TypeScript Style via `gts`; coding contract
 [`CONVENTIONS.md`](../../CONVENTIONS.md).
 
-> **Status: the keep-alive, the FHIR read proxy and the session lifecycle on sign-in and sign-out and the scaffold.** Serves
+> **Status: the SPA's runtime config, the keep-alive, the FHIR read proxy and the session lifecycle on sign-in and sign-out and the scaffold.** Serves
 > the SPA, `/bff/health` and `/bff/ready` (API-45), sign-in (API-40, API-41), the session read (API-42),
-> sign-out (API-43), the allow-listed FHIR reads (API-44) and the keep-alive (API-46), refreshes access tokens server-side and ends sessions
+> sign-out (API-43), the allow-listed FHIR reads (API-44), the keep-alive (API-46) and the SPA's runtime config (API-48), refreshes access tokens server-side and ends sessions
 > at the inactivity timeout and the 10 h maximum, and puts the NFR-SEC-2 headers on every response.
 
 | Path | What it does |
@@ -22,11 +22,12 @@ Node 22 + TypeScript on **Fastify 5**, Google TypeScript Style via `gts`; coding
 | `GET /bff/ready` | readiness: `200 {"status":"ready"}` when OpenEMR's SMART discovery (API-2) returns a SMART configuration, else `503 {"status":"not_ready","reason":…}` with `unreachable`, `timeout`, `upstream_status` or `invalid_discovery` — never FHIR `metadata` ([BUG-28](../../REQUIREMENTS.md#bug-28)). **Cached 5 s**: one answer, ready or not, is reused for 5 s from when it arrived — timed on the monotonic clock (`performance.now()`), so a wall-clock step neither stretches nor cuts the window — and probes that come while a check is in flight share it, so a probe storm reaches OpenEMR at most once per 5 s — and a change in OpenEMR (down or back up) shows here up to 5 s late |
 | `POST /bff/login` (API-40) | the SPA's sign-in **form post**. CSRF-guarded (below). Reads discovery, stores `state`, `nonce` and the PKCE verifier server-side under a new **handshake cookie**, and `303`s to OpenEMR's authorize endpoint with `response_type=code`, the client id, `redirect_uri` = `<BFF_PUBLIC_ORIGIN>/bff/callback`, exactly the [§2 scopes](../../INTERFACES.md#2-scopes), `state`, `nonce`, `code_challenge` + `code_challenge_method=S256` ([BUG-16](../../REQUIREMENTS.md#bug-16)) and `aud` = SMART discovery's `issuer` ([BUG-17](../../REQUIREMENTS.md#bug-17)). Discovery unusable → `303 /signed-out?reason=signin_unavailable` |
 | `GET /bff/callback` (API-41) | OpenEMR's redirect back — the registered `redirect_uri`. Takes the handshake **once** (deleted whatever happens, cookie cleared), checks `state` against it, exchanges the code (API-4, `client_secret_post`, with the verifier), validates the `id_token` (below), then sets the **session cookie** and `303`s to `/` — which never requires a session, because the new `Strict` cookie does not arrive on that cross-site-started hop ([API-41](../../INTERFACES.md#api-41)). Any failure `303`s to `/signed-out?reason=signin_failed` (OpenEMR said no, or something did not match) or `?reason=signin_unavailable` (OpenEMR could not be asked) with no session cookie |
-| `POST /bff/logout` (API-43) | the SPA's sign-out **form post**. CSRF-guarded. Destroys the server-side session, clears the session cookie, and `303`s to OpenEMR's end-session endpoint (API-6) with `id_token_hint` and `post_logout_redirect_uri` = `<BFF_PUBLIC_ORIGIN>/signed-out` exactly ([BUG-5](../../REQUIREMENTS.md#bug-5)); with no session, straight to `/signed-out` (or `/signed-out?reason=idle` when that reason was posted). An optional urlencoded `reason=idle` (automatic logoff or privacy-screen grace) is validated (closed set); on the OpenEMR path it is stashed in a short-lived `bff-logout-reason` cookie (`SameSite=Lax`) for W-1b because the registered post-logout URI cannot carry a query; unknown values are ignored, and every path that does not set the cookie clears a lingering one; `signout_partial` still wins when discovery is down. If OpenEMR discovery is down, the local session is still destroyed but OpenEMR's cannot be ended: `303 /signed-out?reason=signout_partial`, so the app can say OpenEMR may still be signed in |
+| `POST /bff/logout` (API-43) | the SPA's sign-out **form post**. CSRF-guarded. Destroys the server-side session, clears the session cookie, and `303`s to OpenEMR's end-session endpoint (API-6) with `id_token_hint` and `post_logout_redirect_uri` = `<BFF_PUBLIC_ORIGIN>/signed-out` exactly ([BUG-5](../../REQUIREMENTS.md#bug-5)); with no session, straight to `/signed-out` (or `/signed-out?reason=idle` when that reason was posted). An optional urlencoded `reason=idle` (automatic logoff or privacy-screen grace) is validated (closed set); on the OpenEMR path it is stashed in a short-lived `bff-logout-reason` cookie (`SameSite=Lax`) for W-1b because the registered post-logout URI cannot carry a query; unknown values are ignored, and every path that does not set the cookie clears a lingering one with the same Path, SameSite and Secure as the set; `signout_partial` still wins when discovery is down. If OpenEMR discovery is down, the local session is still destroyed but OpenEMR's cannot be ended: `303 /signed-out?reason=signout_partial`, so the app can say OpenEMR may still be signed in |
 | `GET /bff/session` (API-42) | who is signed in and until when, for the session cookie: `200 {"authenticated":true,"user":{"displayName":…},"expiresAt":…,"idleTimeoutSeconds":…,"grantedScopes":[…]}`, or `401 {"error":"unauthenticated"}`. Not activity — *Session lifecycle* below |
 | `POST /bff/session/activity` (API-46) | "Stay signed in" and the automatic keep-alive (FR-AUTH-4). CSRF-guarded like sign-in and sign-out; a same-origin `fetch` with no body (an empty form body is accepted too). Restarts the idle clock and answers `200 {"expiresAt":…}`, the new expiry — never past the 10 h maximum, nor past the access token's lapse when there is no refresh token. Never calls OpenEMR: no refresh, no patient data, never a token. No live session → `401 {"error":"unauthenticated"}`, and an ended one is never revived. *Session lifecycle* below |
+| `GET /bff/config` (API-48) | the SPA's runtime config: `200 {"patientApps":[{"label":…,"url":…,"aclHint"?:…}],"privacyGraceSeconds":…}` — this service's `PATIENT_APPS` and `PRIVACY_GRACE_SECONDS`, parsed once at start-up (*Configuration* below), so one image runs in every environment. No session needed — the SPA reads it beside the session read and draws nothing signed in until both answer — never calls OpenEMR, the same answer for every request, `no-store` like every `/bff/*` answer |
 | `GET /bff/fhir/{path}` (API-44) | the allow-listed FHIR read proxy — only the API-10…24 reads, with the session's bearer token attached here; OpenEMR's status and body pass through. Details below (*The FHIR read proxy, in detail*) |
-| other methods on those six | `405` with `Allow: POST` (login, logout, session/activity) or `Allow: GET` (callback, session) — state changes are POST-only |
+| other methods on those seven | `405` with `Allow: POST` (login, logout, session/activity) or `Allow: GET` (callback, session, config) — state changes are POST-only |
 | other methods on `/bff/fhir/*` | `405 {"error":"method_not_allowed"}` with `Allow: GET` — reads only |
 | any other `/bff/*`, any method | `404 {"error":"not_found"}`, never the SPA shell, never the disk. The namespace is judged on the percent-decoded, case-folded path with `\` and repeated `/` read as one `/`, so `/BFF/x`, `/bff%2fx`, `/%62ff/x`, `/bff;x/y`, `//bff/x` and `/bff%5cx` are 404s too, with `Cache-Control: no-store` |
 
@@ -265,6 +266,16 @@ registered without it cannot be updated, only replaced ([runbook](../../DEPLOYME
 **Session limits.** `BFF_IDLE_TIMEOUT_SECONDS` (default 900) and `BFF_MAX_SESSION_SECONDS` (default 36 000) —
 *Session lifecycle* above; start-up refuses an idle timeout longer than the maximum.
 
+**The SPA's settings**, served to it by `/bff/config` (API-48): `PATIENT_APPS`, the Patient
+apps slot's JSON list ([FR-APP-1](../../REQUIREMENTS.md#fr-app-1); unset, blank or any invalid entry = no
+slot), and `PRIVACY_GRACE_SECONDS`, how long the app may stay hidden before it signs out
+([FR-UI-4](../../REQUIREMENTS.md#fr-ui-4); whole seconds 0–900, anything else 60). Both are optional,
+public and per environment, and replace the build-time `VITE_PATIENT_APPS` / `VITE_PRIVACY_GRACE_SECONDS`, so the
+image carries nothing per environment. **A bad value never stops start-up** — unlike every other variable here —
+because a misconfigured link list must not take the clinical app down: it is ignored (no slot, or the 60 s default),
+and one `warn` line at start-up, `optional setting ignored`, names the variable and the rule it broke, never the
+value. The rules and the defaults: [`.env.example`](.env.example); the code: `src/runtime_config.ts`.
+
 ## Local development
 
 The `local` entry in `config/oauth-clients.json` registers `frontendOrigin` `http://localhost:5173`, the **Vite dev
@@ -273,6 +284,10 @@ server** — so that is the origin the browser uses, and Vite proxies `/bff/*` t
 
 - `BFF_PUBLIC_ORIGIN=http://localhost:5173`, so the redirect URIs match the registration and the CSRF guard's
   `Origin` fallback matches the browser.
+- The SPA's settings come from here too: the dev server proxies `/bff/config` like every `/bff/*` path, so the
+  `PATIENT_APPS` and `PRIVACY_GRACE_SECONDS` this process was started with are what `npm run dev` shows — one way to
+  set them in every environment, and no build-time fallback that could reach an image. A local launch URL may be
+  plain http on `localhost`.
 - `__Host-` cookies need `Secure`, which plain http cannot carry, so a plain-http origin requires
   **`BFF_DEV_INSECURE_COOKIES=true`**: the cookies are named `bff-handshake` / `bff-session` and drop `Secure`;
   `HttpOnly`, `SameSite` and `Path=/` stay. Start-up **refuses** the flag with an https origin, with a non-loopback
@@ -288,6 +303,9 @@ PORT=8080 BFF_SPA_DIST_DIR=../dist OPENEMR_BASE_URL=https://localhost:9300 \
   BFF_PUBLIC_ORIGIN=http://localhost:5173 BFF_DEV_INSECURE_COOKIES=true \
   OAUTH_CLIENT_ID=<your local client id> OAUTH_CLIENT_SECRET=<from your untracked env file> \
   NODE_EXTRA_CA_CERTS=~/openemr-dev-stack.pem npm start
+# Optional, for the Patient apps slot and the privacy grace, add before npm start:
+#   PATIENT_APPS='[{"label":"Launch AgentForge","url":"https://localhost:9300/interface/modules/custom_modules/oe-module-agentforge/public/agenda-drilldown-launch.php?patient={patientId}"}]'
+#   PRIVACY_GRACE_SECONDS=60
 ```
 
 `NODE_EXTRA_CA_CERTS` trusts the dev stack's self-signed certificate without turning verification off — the
@@ -318,7 +336,9 @@ docker run --rm -p 8080:8080 \
   openemr-frontend:local
 ```
 
-`/bff/health` on the running container answers `{"status":"ok","build":…}`. Deployment, its variables and the
+`/bff/health` on the running container answers `{"status":"ok","build":…}`; add `-e PATIENT_APPS=…` and
+`-e PRIVACY_GRACE_SECONDS=…` for the SPA's settings, which `/bff/config` then serves — the same image in any
+environment. Deployment, its variables and the
 cache headers the CDN relies on: [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
 
 Local gates, the same commands the token handler's CI checks run:
